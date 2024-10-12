@@ -16,7 +16,7 @@ wget://https://raw.githubusercontent.com/saym101/setup/main/setup.sh
 6. Установка необходимого ПО
    Можно остаить как есть, можно изменить на свой, можно что то добавить или удалить. У каждого свой вкус.
    По умолчанию используется такой набор:
-   - curl gnupg  mc ufw htop iftop ntpdate ntp network-manager net-tools ca-certificates wget lynx language-pack-ru openssh-server openssh-client xclip
+-  curl gnupg  mc ufw htop iftop ntpdate ntp network-manager net-tools ca-certificates wget lynx language-pack-ru openssh-server openssh-client xclip
 8. Настройка NTP сервиса
    Меняет сервера которые используются по умолчанию на эти:
 -	pool 0.ru.pool.ntp.org
