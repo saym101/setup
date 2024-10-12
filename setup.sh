@@ -1,6 +1,7 @@
 #!/bin/bash
 clear
-# Цвета для вывода
+
+# === Переменные ===
 r=`tput setaf 1`  # красный
 g=`tput setaf 2`  # зеленый
 y=`tput setaf 3`  # желтый
@@ -9,13 +10,65 @@ p=`tput setaf 5`  # фиолетовый
 x=`tput sgr0`     # сброс цвета
 b=`tput bold`     # жирный текст
 
-# Текущие настройки
 currhostname=$(cat /etc/hostname)
 authorizedfile="/root/.ssh/authorized_keys"
 sshconfigfile="/etc/ssh/sshd_config"
-currusers=$(awk -F: '$3 >= 1000 && $6 ~ /^\/home/ {print $1}' /etc/passwd)
 DATE=$(date "+%Y-%m-%d")
+standard_packages="curl gnupg  mc ufw htop iftop ntpdate ntp network-manager net-tools ca-certificates wget lynx language-pack-ru openssh-server openssh-client xclip"
+ntp_servers="pool 0.ru.pool.ntp.org
+pool 1.ru.pool.ntp.org
+pool 2.ru.pool.ntp.org
+pool 3.ru.pool.ntp.org"
 
+# === Функции ===
+# Функция для запроса подтверждения с обработкой ошибок и валидацией ввода
+confirm() {
+    local msg="$1"
+    local default="$2"
+    local answer
+
+    while true; do
+        read -r -p "${msg} [${default,,}] " answer
+        answer="${answer,,}" 
+
+        if [[ -z "$answer" ]]; then
+            answer="${default,,}"
+        fi
+
+        if [[ "$answer" =~ ^(y|n)$ ]]; then
+            break
+        else
+            echo "${r}Неверный ввод. Пожалуйста, введите 'y' или 'n'.${x}"
+        fi
+    done
+
+    [[ "$answer" == "y" ]]
+}
+
+# Функция создания домашнего каталога с папками
+create_home_dir() {
+    local username="$1"
+    local home_dir="/home/$username"
+
+    # Создание домашнего каталога
+    mkdir -p "$home_dir"
+
+    # Создание папок в домашнем каталоге
+    mkdir -p "$home_dir/.config"
+    mkdir -p "$home_dir/.local"
+    mkdir -p "$home_dir/.local/share"
+    mkdir -p "$home_dir/Documents"
+    mkdir -p "$home_dir/Download"
+    mkdir -p "$home_dir/Backup"  
+    mkdir -p "$home_dir/Music"
+    mkdir -p "$home_dir/Pictures"
+    mkdir -p "$home_dir/Video"
+
+    # Создание пустого файла .bashrc
+    touch "$home_dir/.bashrc"
+}
+
+# === Основной код ===
 echo
 echo "${g}Настройка Debian\Ubuntu с помощью скрипта https://github.com/saym101/setup ${x}"
 echo
@@ -28,63 +81,26 @@ if [[ $EUID -ne 0 ]]; then
     echo "${r}Этот скрипт должен быть запущен от имени root. Перезапустите его 'sudo bash ./script.sh' ${x}"
 		exit
 fi
-###################################################################################
 
-#1 Установка hostname
+# 1. Установка hostname
 echo "${g}1] Установка hostname ${x}"
-
-# Функция для запроса подтверждения с обработкой ошибок и валидацией ввода
-confirm() {
-  local msg="$1"
-  local default="$2"
-  local answer
-
-  while true; do
-    read -r -p "${msg} [${default,,}] " answer
-    answer="${answer,,}" # Приводим ответ к нижнему регистру
-
-    if [[ -z "$answer" ]]; then
-      answer="${default,,}"
-    fi
-
-    if [[ "$answer" =~ ^(y|n)$ ]]; then
-      break
-    else
-      echo "${r}Неверный ввод. Пожалуйста, введите 'y' или 'n'.${x}"
-    fi
-  done
-
-  [[ "$answer" == "y" ]]
-}
-
-# Получаем текущее имя хоста
 current_hostname=$(hostname)
-
-# Запрашиваем у пользователя, хочет ли он изменить имя хоста
 echo "Текущее имя хоста: $current_hostname"
-if confirm "Хотите изменить имя хоста?" "y|n"; then
 
-  # Получаем новое имя хоста
-  while true; do
-    read -r -p "Введите новое имя хоста: " new_hostname
-    [[ -n "$new_hostname" ]] && break
-    echo "${r}Имя хоста не может быть пустым.${x}"
-  done
+if confirm ${y}"Хотите изменить имя хоста?" "y|n"${x}; then
+    while true; do
+        read -r -p "Введите новое имя хоста: " new_hostname
+        [[ -n "$new_hostname" ]] && break
+        echo "${r}Имя хоста не может быть пустым.${x}"
+    done
 
-  # Обновляем /etc/hostname
-  echo "$new_hostname" > /etc/hostname
-
-  # Обновляем /etc/hosts: заменяем имя хоста после 127.0.1.1
-  sed -i "s/^\(127\.0\.1\.1\)\s.*$/\1 $new_hostname/" /etc/hosts
-
-  # Применяем новое имя хоста
-  hostname $new_hostname
-
-  echo "${y}Имя хоста успешно изменено на $new_hostname.${x}"
+    echo "$new_hostname" > /etc/hostname
+    sed -i "s/^\(127\.0\.1\.1\)\s.*$/\1 $new_hostname/" /etc/hosts
+    hostname $new_hostname
+    echo "${y}Имя хоста успешно изменено на $new_hostname.${x}"
 else
-  echo "${r}Отмена изменения имени хоста.${x}"
+    echo "${r}Отмена изменения имени хоста.${x}"
 fi
-###################################################################################
 
 # 2. Установка корректной локали
 echo "${g}2] Устанавливаем корректную локаль... ${x}"
@@ -93,20 +109,16 @@ echo ""
 locale | grep "^LANG=" # Выводим только строку LANG
 echo ""
 
-# Ввод и проверка изменения локали
 while true; do
-    read -r -p "Меняем локаль? [y/N] " response
+    read -r -p "${y}Меняем локаль? [y/N] ${x}" response
     response=${response,,} # Преобразуем в нижний регистр
     [[ -z $response ]] && response="n" # Если введено пустое значение, по умолчанию "n"
 
     case $response in
         y|yes)
-            # Запрашиваем у пользователя новую локаль
             read -r -p "Введите желаемую локаль (по умолчанию ru_RU.UTF-8): " new_locale
-            # Если ничего не введено, устанавливаем локаль по умолчанию
             new_locale=${new_locale:-"ru_RU.UTF-8"}
             
-            # Устанавливаем локаль в зависимости от системы
             if grep -qi "debian" /etc/os-release; then
                 echo "LANG=\"$new_locale\"" > /etc/default/locale
             else
@@ -125,14 +137,12 @@ while true; do
             ;;
     esac
 done
-###################################################################################
 
 # 3. Изменяем часовой пояс
 read -r -p "${g} 3] Хотите изменить часовой пояс? [y/N] ${x}" response
 response=${response,,} # Преобразуем в нижний регистр
 response=$(tr -dc '[yn]' <<< "$response")
 
-# Цикл проверки ввода
 while true; do
     if [[ $response =~ ^[yn]$ ]]; then
         break
@@ -145,24 +155,17 @@ while true; do
 done
 
 if [[ $response == 'y' ]]; then
-    # ... (вывод текущей даты и часового пояса)
+    date
+    timedatectl | grep 'Time zone'
+    echo
 
-    # Список часовых поясов региона "Europe"
     echo "Выберите часовой пояс из региона Europe (по умолчанию 35 - Europe/Moscow):"
-
-    # Вывод пронумерованного списка часовых поясов в три колонки
     timedatectl list-timezones | grep "^Europe/" | nl -s ") " -w 2 | pr -3 -t -w 80 
 
-    # Получить ввод пользователя
     while true; do 
-        read -p "Введите номер часового пояса. По умолчанию: 35) Europe/Moscow.: " choice
+        read -p "Введите номер часового пояса. По умолчанию: 35 Europe/Moscow.: " choice
+        [[ -z "$choice" ]] && choice=35 
 
-        # Если ввод пустой, устанавливаем значение по умолчанию (35)
-        if [[ -z "$choice" ]]; then
-            choice=35 
-        fi
-
-        # Проверка на допустимый ввод
         if ! [[ "$choice" =~ ^[0-9]+$ ]] ; then
             echo "${r}Некорректный ввод. Введите номер из списка.${x}" 
             continue
@@ -177,79 +180,65 @@ if [[ $response == 'y' ]]; then
         fi
     done
 
-    # Установить выбранный часовой пояс
     timedatectl set-timezone "$selected_timezone"
     echo "${y}Часовой пояс изменен на $selected_timezone.${x}"
     echo 
 else
     echo "${r}Процедура изменения часового пояса отменена.${x}"
 fi
-###################################################################################
 
 # 4. Установка новых репозиториев xUSSR и обновление системы
 echo "${g}4] Установка репозиториев и обновление системы${x}"
 echo ""
 while true; do
-    read -r -p "${g} Хотите сменить источник пакетов на xUSSR? [y/N]${x} " response
-    response=${response,,} # Преобразуем в нижний регистр
+    read -r -p "${y} Хотите сменить источник пакетов на xUSSR? [y/N]${x} " response
+    response=${response,,} 
 
     if [[ $response == 'n' || $response == 'no' ]]; then
         echo "${r}Изменение репозиториев отменено. Продолжаем выполнение скрипта без изменений.${x}"
-        break # Выходим из цикла, если ответ "нет"
+        break 
     elif [[ $response == 'y' || $response == 'yes' ]]; then
-        # Получаем информацию о системе
         os_info=$(cat /etc/os-release)
 
-        ## Определяем систему и соответствующие репозитории
         if echo "$os_info" | grep -q "Debian"; then
             debian_ver=$(grep "^VERSION_ID=" /etc/os-release | cut -d '"' -f 2)
             case "$debian_ver" in
-                10)  # Debian 10
-                    repos='deb http://mirror.docker.ru/debian buster main contrib non-free
+                10) repos='deb http://mirror.docker.ru/debian buster main contrib non-free
 deb http://mirror.docker.ru/debian-security buster/updates main contrib non-free
 deb http://mirror.docker.ru/debian buster-updates main contrib non-free';;
-                11)  # Debian 11
-                    repos='deb http://mirror.docker.ru/debian bullseye main contrib non-free
+                11) repos='deb http://mirror.docker.ru/debian bullseye main contrib non-free
 deb http://mirror.docker.ru/debian bullseye-updates main contrib non-free
 deb http://mirror.docker.ru/debian-security bullseye-security main contrib non-free';;
-                12)  # Debian 12
-                    repos='deb http://mirror.docker.ru/debian bookworm main contrib non-free
+                12) repos='deb http://mirror.docker.ru/debian bookworm main contrib non-free
 deb http://mirror.docker.ru/debian-security bookworm-security main contrib non-free
 deb http://mirror.docker.ru/debian bookworm-updates main contrib non-free';;
-                13)  # Debian 13
-                    repos='deb http://mirror.docker.ru/debian trixie main contrib non-free
+                13) repos='deb http://mirror.docker.ru/debian trixie main contrib non-free
 deb http://mirror.docker.ru/debian-security trixie-security main contrib non-free
 deb http://mirror.docker.ru/debian trixie-updates main contrib non-free';;
-                *)   # Неизвестная версия Debian
-                    echo "${r}Неизвестная версия Debian. Текущая информация:${x}"
+                *)  echo "${r}Неизвестная версия Debian. Текущая информация:${x}"
                     echo "$os_info" | grep "^VERSION_ID="
                     echo "${y}Продолжаем выполнение без изменений репозиториев.${x}"
-                    repos=''
-                    ;;
+                    repos='';;
             esac
         elif echo "$os_info" | grep -q "Ubuntu"; then
             ubuntu_ver=$(grep "^VERSION_ID=" /etc/os-release | cut -d '"' -f 2)
             case "$ubuntu_ver" in
-                22.04)  # Ubuntu 22.04
-                    repos='deb http://mirror.yandex.ru/ubuntu/ jammy main restricted universe multiverse
+                22.04) repos='deb http://mirror.yandex.ru/ubuntu/ jammy main restricted universe multiverse
 deb http://mirror.yandex.ru/ubuntu/ jammy-security main restricted universe multiverse
 deb http://mirror.yandex.ru/ubuntu/ jammy-updates main restricted universe multiverse
 deb http://mirror.yandex.ru/ubuntu/ jammy-backports main restricted universe multiverse
 deb http://mirror.yandex.ru/ubuntu/ jammy-proposed main restricted universe multiverse
 deb http://archive.canonical.com/ubuntu/ jammy partner';;
-                20.04)  # Ubuntu 20.04
-                    repos='deb http://mirror.yandex.ru/ubuntu/ focal main restricted universe multiverse
+                20.04) repos='deb http://mirror.yandex.ru/ubuntu/ focal main restricted universe multiverse
 deb http://mirror.yandex.ru/ubuntu/ focal-security main restricted universe multiverse
 deb http://mirror.yandex.ru/ubuntu/ focal-updates main restricted universe multiverse
 deb http://mirror.yandex.ru/ubuntu/ focal-backports main restricted universe multiverse
 deb http://mirror.yandex.ru/ubuntu/ focal-proposed main restricted universe multiverse
 deb http://archive.canonical.com/ubuntu/ focal partner';;
-                *)      # Неизвестная версия Ubuntu
-                    echo "${r}Неизвестная версия Ubuntu. Текущая информация:${x}"
+                *) echo "${r}Неизвестная версия Ubuntu. Текущая информация:${x}"
                     echo "$os_info" | grep "^VERSION_ID="
                     echo "${y}Продолжаем выполнение без изменений репозиториев.${x}"
-                    repos=''
-                    ;;
+                    repos='';;
             esac
         else
             echo "${r}Неизвестная операционная система. Текущая информация:${x}"
@@ -258,15 +247,17 @@ deb http://archive.canonical.com/ubuntu/ focal partner';;
             repos=''
         fi
 
-        # Обновление системы ТОЛЬКО если репозитории были изменены
         if [[ -n $repos ]]; then 
+            echo "$repos" > /etc/apt/sources.list
+            echo "${y}Репозитории успешно обновлены для версии $(grep "^VERSION_ID=" /etc/os-release | cut -d '"' -f 2)! ${x}"
+
             echo "${g} Обновление системы после смены источника пакетов${x}"
-            echo "${r} Внимание! Сейчас будет выполнено обновление системы с обновлением репозиториев.${x}"
-echo ""
+            echo "${r} Внимание! Сейчас будет выполнено обновление системы с обновленными репозиториеми.${x}"
+            echo ""
             apt update && apt upgrade -y && apt full-upgrade -y && apt autoremove -y
             echo ""
         fi
-        break # Выходим из цикла, если ответ "да" и обновление выполнено
+        break 
     else
         echo "Неверный ввод. Пожалуйста, введите 'y' (yes) или 'n' (no)."
     fi
@@ -274,15 +265,12 @@ done
 
 echo ""
 
-###################################################################################
-
 # 5. Установка необходимого ПО
 echo "${g} 5] Установка минимального набора ПО${x}"
-standard_packages="curl gnupg htop iftop ntpdate ntp network-manager net-tools ca-certificates wget lynx language-pack-ru openssh-server openssh-client xclip mc ufw"
 
 # Запрос на установку до вывода списка
 while true; do
-    read -p "Установить набор стандартных программ? [y/N]: " install_confirmation
+    read -p "${y}Установить набор стандартных программ? [y/N]: ${x}" install_confirmation
     install_confirmation=${install_confirmation,,} # Преобразуем в нижний регистр
 
     if [[ $install_confirmation == 'y' ]]; then
@@ -309,37 +297,9 @@ while true; do
     fi
 done
 
-###################################################################################
-
 # 6. Настройка NTP сервиса
-echo "${g} 7] Настройка NTP сервиса.${x}"
-# Функция для запроса подтверждения
-confirm() {
-    local msg="$1"
-    while true; do
-        read -r -p "${msg} [y/N] " response
-        response=${response,,} # Преобразуем в нижний регистр
-
-        if [[ $response == 'y' || $response == 'yes' ]]; then
-            return 0  # true
-        elif [[ $response == 'n' || $response == 'no' || -z $response ]]; then 
-            return 1  # false
-        else
-            echo "${r} Неверный ввод. Пожалуйста, введите 'y' или 'n'. ${x}"
-        fi
-    done
-}
-
-# Настройка NTP сервиса
-
 echo "${g} 6] Настройка NTP ${x}"
-if confirm "${y}Хотите настроить NTP? ${x}"; then
-    # Список серверов NTP
-    ntp_servers="pool 0.ru.pool.ntp.org
-pool 1.ru.pool.ntp.org
-pool 2.ru.pool.ntp.org
-pool 3.ru.pool.ntp.org"
-
+if confirm "${y}Хотите настроить NTP? [y/N]${x}"; then
     # Закомментируем все существующие строки, содержащие 'pool' или 'server' с учетом пробелов
     sed -i '/^[[:space:]]*pool\|^[[:space:]]*server/s/^/#/' /etc/ntp.conf
 
@@ -349,16 +309,18 @@ pool 3.ru.pool.ntp.org"
     echo "${y}Старые серверы NTP закомментированы, новые серверы добавлены в /etc/ntp.conf.${x}"
 
     echo "${r}Перезапускаем NTP${x}"
-systemctl restart ntp || service restart ntp
-    echo "."
+    systemctl restart ntp || service restart ntp
+    echo ""
 
     # Вывод ntpq -p
     echo "${y} Информация о синхронизации времени: ${x}"
     ntpq -p
-    echo "."
+    echo ""
+	
+	# Ожидание нажатия клавиши
+	read -n 1 -s -r -p "Нажмите любую клавишу для продолжения..."
+	echo 
 fi
-
-###################################################################################
 
 # 7. Настройка доступа root через SSH без пароля с ключом.
 echo ""
@@ -379,7 +341,8 @@ fi
 # Запрос на создание ключей
 while true; do
     echo
-    read -p "${y} Хотите создать новую пару SSH-ключей или оставить как есть? (y/N): ${x}" -n 1 -r
+	read -p "${y} Хотите создать новую пару SSH-ключей или оставить как есть? (y/N): ${x}" -n 1 -r
+
     echo
 
     # Установка значений по умолчанию
@@ -409,7 +372,7 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
     done
 
     # Запрашиваем путь к директории с установкой пути по умолчанию
-    read -r -p "${y}Введите путь к директории, где будут созданы ключи (по умолчанию ~/.ssh): ${x}" directory
+    read -r -p ${y}"Введите путь к директории, где будут созданы ключи (по умолчанию ~/.ssh): "${x} directory
 
     # Используем путь по умолчанию, если пользователь нажал Enter
     if [[ -z "$directory" ]]; then
@@ -481,10 +444,8 @@ else
     echo ""
 fi
 
-###################################################################################
-
 # 8. Изменение порта для SSH. Настройка UFW
-function configure_ssh_port() {
+configure_ssh_port() {
     echo
     echo "8] Изменение порта для SSH... Первоначальная настройка UFW..."
     echo
@@ -494,7 +455,7 @@ function configure_ssh_port() {
 
     # Проверка существования строки 'Port'
     if grep -Fq "Port " "$sshconfigfile"; then
-        echo "Проверяем, закомментирована строка 'Port' или нет..."
+        echo "${g}Проверяем, закомментирована строка 'Port' или нет...${x}"
 
         # Проверка синтаксиса строки 'Port'
         if grep -Eq '^ *Port ' "$sshconfigfile"; then
@@ -504,7 +465,7 @@ function configure_ssh_port() {
             echo "Строка с номером порта была закомментирована."
             echo "Снимаем комментарий."
             sed -i "/^ *#Port/c\Port 22" "$sshconfigfile"
-            echo "Порт установлен на 22"
+            echo "Порт установлен на 22 используемый SSH по умолчанию"
             current_ssh_port=22  # Обновляем текущий порт после снятия комментария
         fi
     else
@@ -514,7 +475,7 @@ function configure_ssh_port() {
     fi
 
     # Запрос на изменение порта
-    read -p "Изменить текущий порт $current_ssh_port на случайный из диапазона 1025-49150? (Y/n): " -n 1 -r
+    read -p "Изменить текущий порт $current_ssh_port на случайный из диапазона 1025-49150? [y/N]: " -n 1 -r
     echo
 
     if [[ $REPLY =~ ^[Yy]$ ]]; then
@@ -534,6 +495,7 @@ function configure_ssh_port() {
 configure_ssh_port
 
 # Перезапуск SSH
+echo
 echo "Перезапускаем SSH для применения изменений..."
 systemctl restart ssh
 echo
@@ -573,63 +535,48 @@ echo
 echo "Настройки применены. Пожалуйста, убедитесь, что вы можете подключиться по новому порту SSH."
 echo
 
-###################################################################################
-
 # 9. Добавление нового пользователя
-echo "9] Добавление пользователя без прав root."
-# Функция подтверждения
-confirm() {
-  local input
-  while true; do
-    read -p "$1 (Y/n): " -n 1 -r
+echo "${g}9] Добавление пользователя без прав root.${x}"
+if confirm "Хотите добавить нового пользователя?"; then
+    while true; do
+        read -r -p "Введите имя пользователя: " new_user
+        if id -u "$new_user" >/dev/null 2>&1; then
+            echo "${r}Пользователь '$new_user' уже существует. Введите другое имя.${x}"
+        else
+            break
+        fi
+    done
+
+    read -s -r -p "Введите пароль для пользователя '$new_user': " new_user_password
     echo
-    input=$REPLY
-    if [[ $input =~ ^[Yy]$ ]]; then
-      return 0
-    elif [[ $input =~ ^[Nn]$ ]]; then
-      return 1
+    read -s -r -p "Повторите пароль: " new_user_password_confirm
+    echo
+
+    if [[ "$new_user_password" != "$new_user_password_confirm" ]]; then
+        echo "${r}Пароли не совпадают. Отмена создания пользователя.${x}"
     else
-      echo "Неверный ввод. Пожалуйста, введите 'Y' или 'n'."
+        useradd -m -s /bin/bash "$new_user"
+        echo "$new_user:$new_user_password" | chpasswd
+
+        create_home_dir "$new_user"
+
+        echo "${y}Пользователь '$new_user' успешно создан.${x}"
     fi
-  done
-}
-
-# Функция создания домашнего каталога с папками
-create_home_dir() {
-  local username="$1"
-  local home_dir="/home/$username"
-
-  # Создание домашнего каталога
-  mkdir -p "$home_dir"
-
-  # Создание папок в домашнем каталоге
-  mkdir -p "$home_dir/.config"
-  mkdir -p "$home_dir/.local"
-  mkdir -p "$home_dir/.local/share"
-  mkdir -p "$home_dir/Documents"
-  mkdir -p "$home_dir/Download"
-  mkdir -p "$home_dir/Backup"  
-#  mkdir -p "$home_dir/Music"
-#  mkdir -p "$home_dir/Pictures"
-#  mkdir -p "$home_dir/Video"
-
-  # Создание пустого файла .bashrc
-  touch "$home_dir/.bashrc"
-}
-
-###################################################################################
+else
+    echo "${r}Отмена создания пользователя.${x}"
+fi
 
 # 10. Очистка системы
 echo "${g} 10] Очищаем apt кэш.${x}"
-    apt clean all && rm -fr /var/cache/*
-echo ""
+apt clean all && rm -fr /var/cache/*
+echo
+echo "${y}Кэш очищен${x}"
 
-
-echo "${g}{g}Настройка завершена.${x}"
+echo "${y}Настройка системы завершена.${x}"
 echo
 echo "${g}Настоятельно рекомендуется перезагрузить сейчас систему для применения изменений.${x}"
 echo
-read -p "${r}Перезагрузить систему? (Y/n): " -n 1 -r
+read -p "${r}Перезагрузить систему? [y/N]: " -n 1 -r
 echo
 
 if [[ $REPLY =~ ^[Yy]$ ]]; then
