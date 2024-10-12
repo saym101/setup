@@ -1,8 +1,10 @@
 # setup.sh
 # Настройка Debian\Ubuntu при первой загрузке
 
-## Для получения автоматического сценария проверьте wget://https://raw.githubusercontent.com/saym101/setup/main/setup.sh
-
+## Для получения скрипта скопируйте 
+```
+wget://https://raw.githubusercontent.com/saym101/setup/main/setup.sh
+```
 
 войдите на свой только что созданный сервер по ssh в качестве пользователя root
 
