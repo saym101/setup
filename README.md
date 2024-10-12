@@ -1,7 +1,7 @@
 # setup.sh
 # Настройка Debian\Ubuntu при первой загрузке
 
-## Для получения скрипта скопируйте 
+### Для получения скрипта скопируйте 
 ```
 wget://https://raw.githubusercontent.com/saym101/setup/main/setup.sh
 ```
