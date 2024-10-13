@@ -3,7 +3,7 @@
 
 ### Ссылка для копирования скрипта 
 ```
-wget://https://raw.githubusercontent.com/saym101/setup/main/setup.sh
+wget https://raw.githubusercontent.com/saym101/setup/main/setup.sh
 ```
 Что умеет скрипт.
 
