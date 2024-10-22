@@ -15,7 +15,7 @@ currhostname=$(cat /etc/hostname)
 authorizedfile="/root/.ssh/authorized_keys"
 sshconfigfile="/etc/ssh/sshd_config"
 DATE=$(date "+%Y-%m-%d")
-standard_packages="curl gnupg  mc ufw htop iftop ntpdate ntp network-manager net-tools ca-certificates wget lynx language-pack-ru openssh-server openssh-client xclip"
+standard_packages="curl gnupg  mc ufw htop iftop ntpdate ntp net-tools ca-certificates wget lynx language-pack-ru openssh-server openssh-client xclip"
 ntp_servers="pool 0.ru.pool.ntp.org
 pool 1.ru.pool.ntp.org
 pool 2.ru.pool.ntp.org
