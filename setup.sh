@@ -197,18 +197,18 @@ setup_repositories() {
             if echo "$os_info" | grep -q "Debian"; then
                 debian_ver=$(grep "^VERSION_ID=" /etc/os-release | cut -d '"' -f 2)
                 case "$debian_ver" in
-                    10) repos='deb http://mirror.docker.ru/debian buster main contrib non-free
-deb http://mirror.docker.ru/debian-security buster/updates main contrib non-free
-deb http://mirror.docker.ru/debian buster-updates main contrib non-free';;
-                    11) repos='deb http://mirror.docker.ru/debian bullseye main contrib non-free
-deb http://mirror.docker.ru/debian bullseye-updates main contrib non-free
-deb http://mirror.docker.ru/debian-security bullseye-security main contrib non-free';;
-                    12) repos='deb http://mirror.docker.ru/debian bookworm main contrib non-free
-deb http://mirror.docker.ru/debian-security bookworm-security main contrib non-free
-deb http://mirror.docker.ru/debian bookworm-updates main contrib non-free';;
-                    13) repos='deb http://mirror.docker.ru/debian trixie main contrib non-free
-deb http://mirror.docker.ru/debian-security trixie-security main contrib non-free
-deb http://mirror.docker.ru/debian trixie-updates main contrib non-free';;
+                    10) repos='deb http://mirror.docker.ru/debian buster main contrib non-free-firmware
+deb http://mirror.docker.ru/debian-security buster/updates main contrib non-free-firmware
+deb http://mirror.docker.ru/debian buster-updates main contrib non-free-firmware';;
+                    11) repos='deb http://mirror.docker.ru/debian bullseye main contrib non-free-firmware
+deb http://mirror.docker.ru/debian bullseye-updates main contrib non-free-firmware
+deb http://mirror.docker.ru/debian-security bullseye-security main contrib non-free-firmware';;
+                    12) repos='deb http://mirror.docker.ru/debian bookworm main contrib non-free-firmware
+deb http://mirror.docker.ru/debian-security bookworm-security main contrib non-free-firmware
+deb http://mirror.docker.ru/debian bookworm-updates main contrib non-free-firmware';;
+                    13) repos='deb http://mirror.docker.ru/debian trixie main contrib non-free-firmware
+deb http://mirror.docker.ru/debian-security trixie-security main contrib non-free-firmware
+deb http://mirror.docker.ru/debian trixie-updates main contrib non-free-firmware';;
                     *)  echo ${r}"Неизвестная версия Debian. Текущая информация:"${x}
                         echo "$os_info" | grep "^VERSION_ID="
                         echo ${y}"Продолжаем выполнение без изменений репозиториев."${x}
