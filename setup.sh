@@ -1,5 +1,6 @@
 #!/bin/bash
 clear
+# wget https://raw.githubusercontent.com/saym101/setup/main/setup.sh
 
 # === Переменные ===
 r=`tput setaf 1`  # красный
