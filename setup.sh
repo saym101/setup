@@ -155,7 +155,7 @@ setup_timezone() {
         timedatectl list-timezones | grep "^Europe/" | nl -s ") " -w 2 | pr -3 -t -w 80 
 
         while true; do 
-            read -p "Введите номер часового пояса. По умолчанию: 35 Europe/Moscow.: " choice
+            read -r -p "Введите номер часового пояса. По умолчанию: 35 Europe/Moscow.: " choice
             [[ -z "$choice" ]] && choice=35 
 
             if ! [[ "$choice" =~ ^[0-9]+$ ]] ; then
