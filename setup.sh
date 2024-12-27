@@ -30,16 +30,13 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 # Функция для запроса подтверждения с обработкой ошибок и валидацией ввода
 confirm() {
     local msg="$1"
-    local default="$2"
+    local default="${2:-n}"  # По умолчанию "n"
     local answer
 
     while true; do
         read -r -p "${msg} [${default,,}] " answer
+        answer="${answer:-$default}"  # Используем значение по умолчанию, если ввод пустой
         answer="${answer,,}"
-
-        if [[ -z "$answer" ]]; then
-            answer="${default,,}"
-        fi
 
         if [[ "$answer" =~ ^(y|n)$ ]]; then
             break
