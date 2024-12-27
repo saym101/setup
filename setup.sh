@@ -104,6 +104,7 @@ setup_locale() {
 # 3. Функция для изменения часового пояса
 setup_timezone() {
     if confirm "${colors[g]}3] Хотите изменить часовой пояс?${colors[x]}" "n"; then
+        echo "Доступные часовые пояса:"
         timedatectl list-timezones | grep "^Europe/" | nl -s ") " -w 2 | pr -3 -t -w 80
 
         while true; do
@@ -112,13 +113,14 @@ setup_timezone() {
 
             if [[ "$choice" =~ ^[0-9]+$ ]]; then
                 selected_timezone=$(timedatectl list-timezones | grep "^Europe/" | awk -v choice="$choice" "NR==choice {print}")
-                [[ -n "$selected_timezone" ]] && break
+                if [[ -n "$selected_timezone" ]]; then
+                    timedatectl set-timezone "$selected_timezone"
+                    echo "${colors[y]}Часовой пояс изменен на $selected_timezone.${colors[x]}"
+                    break
+                fi
             fi
             echo "${colors[r]}Некорректный ввод. Введите номер из списка.${colors[x]}"
         done
-
-        timedatectl set-timezone "$selected_timezone"
-        echo "${colors[y]}Часовой пояс изменен на $selected_timezone.${colors[x]}"
     else
         echo "${colors[r]}Процедура изменения часового пояса отменена.${colors[x]}"
     fi
