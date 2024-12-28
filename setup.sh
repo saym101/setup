@@ -231,8 +231,8 @@ fi
 while true; do
     clear
     echo "${colors[g]}Настройка Debian/Ubuntu с помощью скрипта https://github.com/saym101/setup${colors[x]}"
-    echo "${colors[r]}Запускайте этот скрипт c правами root. Используя команду su -l${colors[x]}"
-    echo "${colors[r]}Задав предварительно пароль для root командой 'sudo passwd root'.${colors[x]}"
+    echo "${colors[r]}Запускайте этот скрипт c правами root. Или используя команду sudo${colors[x]}"
+    echo "${colors[r]}для использования root напрямую, задайте пароль для root командой 'sudo passwd root'.${colors[x]}"
     echo
     echo "${colors[y]}Выберите номер нужного пункта:${colors[x]}"
     echo "${colors[c]}1.${x}  ${g}Изменить hostname${x}"
