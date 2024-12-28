@@ -189,7 +189,7 @@ setup_software() {
     if confirm "${colors[y]}Установить простой набор программ?${colors[x]}" "n"; then
         echo "${colors[r]}Список программ для установки:${colors[x]}"
         echo "$standard_packages"
-        read -e -i "$standard_packages" -p "Отредактируйте список программ: " user_input
+        read -e -i "$standard_packages" -p "$(echo -e ${colors[g]}"Простой список программ. Можно что то удалить или добавить: "${colors[x]})" user_input
         apt install -y $user_input || echo "${colors[r]}Ошибка при установке пакетов.${colors[x]}"
         cp /usr/share/mc/syntax/sh.syntax /usr/share/mc/syntax/unknown.syntax
         echo "${colors[y]}Установка завершена.${colors[x]}"
