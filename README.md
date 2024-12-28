@@ -3,7 +3,8 @@
 
 ### Ссылка для копирования скрипта 
 ```
-wget https://raw.githubusercontent.com/saym101/setup/main/setup.sh
+bash <(curl -fsS https://raw.githubusercontent.com/saym101/setup/main/setup.sh) --yes
+
 ```
 Что умеет скрипт.
 
