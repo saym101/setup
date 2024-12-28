@@ -184,9 +184,9 @@ deb http://archive.canonical.com/ubuntu/ focal partner';;
 
 # 5. Функция для установки ПО
 setup_software() {
-    echo "${colors[g]}5] Установка минимального набора ПО${colors[x]}"
+    echo "${colors[g]}5] Установка простого набора ПО${colors[x]}"
 
-    if confirm "${colors[y]}Установить набор стандартных программ?${colors[x]}" "n"; then
+    if confirm "${colors[y]}Установить простой набор программ?${colors[x]}" "n"; then
         echo "${colors[r]}Список программ для установки:${colors[x]}"
         echo "$standard_packages"
         read -e -i "$standard_packages" -p "Отредактируйте список программ: " user_input
