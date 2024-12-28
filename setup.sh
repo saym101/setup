@@ -203,14 +203,17 @@ setup_chrony() {
     echo "${colors[g]}6] Настройка Chrony${colors[x]}"
 
     if confirm "${colors[y]}Хотите настроить Chrony?${colors[x]}" "n"; then
-        if ! command -v chrony &> /dev/null; then
+        # Проверка установки Chrony через dpkg
+        if ! dpkg -l | grep -q '^ii.*chrony'; then
             echo "${colors[r]}Chrony не установлен. Установите его и повторите попытку.${colors[x]}"
             return
         fi
 
+        # Настройка Chrony
         sed -i '/^pool/d' /etc/chrony/chrony.conf
         echo "$chrony_servers" >> /etc/chrony/chrony.conf
 
+        # Перезапуск Chrony
         systemctl restart chrony
         echo "${colors[y]}Chrony настроен и перезапущен.${colors[x]}"
         chronyc sources
