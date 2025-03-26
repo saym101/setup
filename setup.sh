@@ -151,8 +151,8 @@ setup_software() {
 setup_chrony() {
     echo "${colors[g]}5] Настройка Chrony${colors[x]}"
 
-    # Проверка статуса Chrony и вывод текущих источников
-    if dpkg -s chrony &> /dev/null; then
+    # Проверка, установлен ли Chrony и существует ли конфигурационный файл
+    if command -v chronyc >/dev/null 2>&1 && [ -f /etc/chrony/chrony.conf ]; then
         echo "${colors[y]}Chrony установлен.${colors[x]}"
         echo "${colors[y]}Текущие источники синхронизации:${colors[x]}"
         echo
@@ -165,19 +165,29 @@ setup_chrony() {
 
         # Запрос на смену серверов
         if confirm "${colors[y]}Хотите сменить NTP-серверы в настройках?${colors[x]}" "n"; then
-            echo "${colors[y]}Текущие серверы по умолчанию:${colors[x]}"
+            # Показываем текущие серверы по умолчанию
+            echo "${colors[y]}Предлагаемые серверы по умолчанию:${colors[x]}"
             echo "$chrony_servers"
             echo
-            read -e -i "$chrony_servers" -p "${colors[y]}Введите новые NTP-серверы (каждый с новой строки, Ctrl+D для завершения):${colors[x]} " new_servers
+            # Запрашиваем новые серверы
+            read -e -i "$chrony_servers" -p "${colors[y]}Введите новые NTP-серверы (каждый с новой строки, только адреса, Ctrl+D для завершения):${colors[x]} " new_servers
             if [ -n "$new_servers" ]; then
+                # Удаляем существующие строки pool
                 sed -i '/^pool/d' /etc/chrony/chrony.conf
-                echo "$new_servers" >> /etc/chrony/chrony.conf
-                systemctl restart chrony
-                echo "${colors[y]}NTP-серверы обновлены и Chrony перезапущен.${colors[x]}"
-                echo "${colors[y]}Обновлённые источники синхронизации:${colors[x]}"
-                echo
-                chronyc sources
-                echo
+                # Преобразуем введённые серверы, добавляя "pool" и "iburst"
+                echo "$new_servers" | while IFS= read -r server; do
+                    if [ -n "$server" ]; then
+                        echo "pool $server iburst" >> /etc/chrony/chrony.conf
+                    fi
+                done
+                # Перезапускаем Chrony и проверяем результат
+                systemctl restart chrony && {
+                    echo "${colors[y]}NTP-серверы обновлены и Chrony перезапущен.${colors[x]}"
+                    echo "${colors[y]}Обновлённые источники синхронизации:${colors[x]}"
+                    echo
+                    chronyc sources
+                    echo
+                } || echo "${colors[r]}Ошибка при перезапуске Chrony.${colors[x]}"
             else
                 echo "${colors[r]}Серверы не введены, настройки остались без изменений.${colors[x]}"
             fi
@@ -185,52 +195,28 @@ setup_chrony() {
             echo "${colors[r]}Смена серверов отменена.${colors[x]}"
         fi
     else
-        echo "${colors[r]}Chrony не установлен.${colors[x]}"
+        echo "${colors[r]}Chrony не установлен или конфигурационный файл отсутствует.${colors[x]}"
         if confirm "${colors[y]}Установить Chrony?${colors[x]}" "y"; then
-            apt install -y chrony || {
+            apt update && apt install -y chrony || {
                 echo "${colors[r]}Ошибка при установке Chrony.${colors[x]}"
                 return
             }
             echo "${colors[y]}Chrony успешно установлен.${colors[x]}"
-
-            # Запрос на настройку серверов после установки
-            if confirm "${colors[y]}Хотите настроить NTP-серверы сейчас?${colors[x]}" "y"; then
-                echo "${colors[y]}Серверы по умолчанию:${colors[x]}"
+            # После установки добавляем серверы с "pool" и "iburst"
+            echo "$chrony_servers" | while IFS= read -r server; do
+                if [ -n "$server" ]; then
+                    echo "pool $server iburst" >> /etc/chrony/chrony.conf
+                fi
+            done
+            systemctl restart chrony && {
+                echo "${colors[y]}Применены серверы по умолчанию:${colors[x]}"
                 echo "$chrony_servers"
                 echo
-                read -e -i "$chrony_servers" -p "${colors[y]}Введите новые NTP-серверы (каждый с новой строки, Ctrl+D для завершения):${colors[x]} " new_servers
-                if [ -n "$new_servers" ]; then
-                    sed -i '/^pool/d' /etc/chrony/chrony.conf
-                    echo "$new_servers" >> /etc/chrony/chrony.conf
-                    systemctl restart chrony
-                    echo "${colors[y]}NTP-серверы настроены и Chrony перезапущен.${colors[x]}"
-                    echo "${colors[y]}Текущие источники синхронизации:${colors[x]}"
-                    echo
-                    chronyc sources
-                    echo
-                else
-                    echo "${colors[r]}Серверы не введены, используются настройки по умолчанию.${colors[x]}"
-                    sed -i '/^pool/d' /etc/chrony/chrony.conf
-                    echo "$chrony_servers" >> /etc/chrony/chrony.conf
-                    systemctl restart chrony
-                    echo "${colors[y]}Применены серверы по умолчанию:${colors[x]}"
-                    echo "$chrony_servers"
-                    echo
-                    echo "${colors[y]}Текущие источники синхронизации:${colors[x]}"
-                    echo
-                    chronyc sources
-                    echo
-                fi
-            else
-                echo "${colors[r]}Настройка серверов пропущена. Применены настройки по умолчанию.${colors[x]}"
-                sed -i '/^pool/d' /etc/chrony/chrony.conf
-                echo "$chrony_servers" >> /etc/chrony/chrony.conf
-                systemctl restart chrony
                 echo "${colors[y]}Текущие источники синхронизации:${colors[x]}"
                 echo
                 chronyc sources
                 echo
-            fi
+            } || echo "${colors[r]}Ошибка при перезапуске Chrony после установки.${colors[x]}"
         else
             echo "${colors[r]}Установка Chrony отменена.${colors[x]}"
         fi
