@@ -67,7 +67,7 @@ setup_hostname() {
     local current_hostname=$(hostname)
     echo "Текущее имя хоста: $current_hostname"
 
-    if confirm "${colors[y]}Хотите изменить имя хоста?${colors[x]}" (y/N); then
+    if confirm "${colors[y]}Хотите изменить имя хоста?${colors[x]}" "n"; then
         while true; do
             read -r -p "Введите новое имя хоста: " new_hostname
             [[ -n "$new_hostname" ]] && break
@@ -89,7 +89,7 @@ setup_locale() {
     echo "${colors[g]}Текущая локаль:${colors[x]}"
     locale | grep "^LANG="
 
-    if confirm "${colors[y]}Меняем локаль?${colors[x]}" (y/N); then
+    if confirm "${colors[y]}Меняем локаль?${colors[x]}" "n"; then
         read -r -p "Введите желаемую локаль (по умолчанию ru_RU.UTF-8): " new_locale
         new_locale=${new_locale:-"ru_RU.UTF-8"}
 
@@ -108,7 +108,7 @@ setup_locale() {
 
 # 3. Функция для изменения часового пояса
 setup_timezone() {
-    if confirm "${colors[g]}3] Хотите изменить часовой пояс?${colors[x]}" (y/N); then
+    if confirm "${colors[g]}3] Хотите изменить часовой пояс?${colors[x]}" "n"; then
         timedatectl list-timezones | grep "^Europe/" | nl -s ") " -w 2 | pr -3 -t -w 80
 
         while true; do
@@ -133,7 +133,7 @@ setup_timezone() {
 setup_software() {
     echo "${colors[g]}4] Установка минимального набора ПО${colors[x]}"
 
-    if confirm "${colors[y]}Установить набор нпрограмм?${colors[x]}" (y/N); then
+    if confirm "${colors[y]}Установить набор программ?${colors[x]}" "n"; then
         echo "${colors[r]}Вот список программ:${colors[x]}"
         echo
         echo "$standard_packages"
@@ -151,10 +151,21 @@ setup_software() {
 setup_chrony() {
     echo "${colors[g]}5] Настройка Chrony${colors[x]}"
 
-    if confirm "${colors[y]}Хотите настроить Chrony?${colors[x]}" (y/N); then
-        if ! dpkg -s chrony &> /dev/null; then
-            echo "${colors[r]}Chrony не установлен. Установите его и повторите попытку.${colors[x]}"
-            return
+    if confirm "${colors[y]}Хотите настроить Chrony?${colors[x]}" "n"; then
+        if dpkg -s chrony &> /dev/null; then
+            echo "${colors[y]}Chrony уже установлен.${colors[x]}"
+        else
+            echo "${colors[r]}Chrony не установлен.${colors[x]}"
+            if confirm "${colors[y]}Установить Chrony?${colors[x]}" "y"; then
+                apt install -y chrony || {
+                    echo "${colors[r]}Ошибка при установке Chrony.${colors[x]}"
+                    return
+                }
+                echo "${colors[y]}Chrony успешно установлен.${colors[x]}"
+            else
+                echo "${colors[r]}Установка Chrony отменена. Настройка невозможна без Chrony.${colors[x]}"
+                return
+            fi
         fi
 
         sed -i '/^pool/d' /etc/chrony/chrony.conf
@@ -249,7 +260,7 @@ setup_ssh_keys() {
                 puttygen "$key_path" -o "$key_path.ppk"
                 if [ $? -eq 0 ]; then
                     echo "${colors[y]}Ключ сконвертирован в $key_path.ppk${colors[x]}"
-                    echo "${colors[y]}Данный ключ $key_path.ppk$ нужен для настройки доступа в программе PuTTY/KiTTY по ключу ${colors[x]}"
+                    echo "${colors[y]}Данный ключ $key_path.ppk нужен для настройки доступа в программе PuTTY/KiTTY по ключу ${colors[x]}"
                     echo "${colors[y]}Скопируйте текст ниже в файл с расширением .ppk (например, id_$currhostname-$DATE.ppk) на вашем компьютере.${colors[x]}"
                     echo "${colors[y]}Убедитесь, что копируете текст полностью, который между дефисами, включая строки вроде PuTTY-User-Key-File-2: ssh-rsa и Private-MAC.${colors[x]}"
                     echo
@@ -405,7 +416,7 @@ configure_ufw() {
 # 8. Функция для добавления нового пользователя
 add_new_user() {
     echo "${colors[g]}8] Добавление пользователя без прав root.${colors[x]}"
-    if confirm "Хотите добавить нового пользователя?"; then
+    if confirm "Хотите добавить нового пользователя?" "n"; then
         while true; do
             read -r -p "Введите имя пользователя: " new_user
             if id -u "$new_user" >/dev/null 2>&1; then
@@ -437,10 +448,14 @@ add_new_user() {
 
 # 9. Функция для очистки apt кэша
 clean_apt_cache() {
-    echo "${colors[g]}9] Очищаем apt кэш.${colors[x]}"
-    apt clean all && rm -fr /var/cache/*
-    echo
-    echo "${colors[y]}Кэш очищен${colors[x]}"
+    echo "${colors[g]}9] Очищаем apt кэш${colors[x]}"
+    if confirm "${colors[y]}Хотите очистить apt кэш?${colors[x]}" "n"; then
+        apt clean all && rm -fr /var/cache/*
+        echo
+        echo "${colors[y]}Кэш очищен${colors[x]}"
+    else
+        echo "${colors[r]}Очистка кэша отменена${colors[x]}"
+    fi
 }
 
 # 10. Функция для перезагрузки системы
@@ -480,7 +495,7 @@ while true; do
     echo "${colors[r]}Запускайте этот скрипт c правами root. Используя команду su -l${colors[x]}"
     echo "${colors[r]}Задав предварительно пароль для root командой 'sudo passwd root'.${colors[x]}"
     echo
-    echo "${colors[y]}Выберите номер нужного пункта. По умолчанию везде "НЕТ"${colors[x]}"
+    echo "${colors[y]}Выберите номер нужного пункта. По умолчанию везде \"НЕТ\"${colors[x]}"
     echo "${colors[c]}1.${x}  ${g}Изменить hostname${x}"
     echo "${colors[c]}2.${x}  ${g}Изменить локаль${x}"
     echo "${colors[c]}3.${x}  ${g}Изменить часовой пояс${x}"
