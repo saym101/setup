@@ -230,25 +230,49 @@ setup_ssh_keys() {
             mkdir -p "$directory"
         fi
 
-        # Создание SSH-ключей
-        while true; do
-            key_path="$directory/id_$currhostname-$DATE"
-            ssh-keygen -t rsa -b 4096 -C "$email" -f "$key_path" -N ""
+# Создание SSH-ключей
+while true; do
+    key_path="$directory/id_$currhostname-$DATE"
+    ssh-keygen -t rsa -b 4096 -C "$email" -f "$key_path" -N ""
 
-            # Проверка успешности создания ключа
-            if [ $? -eq 0 ]; then
-                echo "${colors[r]}Ключ успешно создан по пути: $key_path ${colors[x]}"
-                break
+    # Проверка успешности создания ключа
+    if [ $? -eq 0 ]; then
+        echo "${colors[r]}Ключ успешно создан по пути: $key_path ${colors[x]}"
+        
+        # Установка putty-tools для конвертации
+        apt install -y putty-tools > /dev/null 2>&1
+        puttygen "$key_path" -o "$key_path.ppk"
+        if [ $? -eq 0 ]; then
+            echo "${colors[y]}Ключ сконвертирован в $key_path.ppk${colors[x]}"
+            echo
+            echo "${colors[y]}Содержимое файла $key_path.ppk:${colors[x]}"
+            echo "---------------------------------------------"
+            cat "$key_path.ppk"
+            echo "---------------------------------------------"
+            echo "${colors[y]}Скопируйте текст выше в файл с расширением .ppk (например, id_$currhostname-$DATE.ppk) на вашем компьютере.${colors[x]}"
+            echo
+            
+            # Запрос на удаление файла
+            if confirm "${colors[y]}Удалить файл $key_path.ppk с сервера?${colors[x]}" "y"; then
+                rm "$key_path.ppk"
+                echo "${colors[y]}Файл $key_path.ppk удалён с сервера.${colors[x]}"
             else
-                echo "${colors[r]}Ошибка при создании ключа.${colors[x]}"
-                read -p "Повторить попытку? [y/N]: " retry
-                retry=${retry,,}
-                if [[ $retry != 'y' ]]; then
-                    echo "Отмена создания SSH-ключей."
-                    exit 1
-                fi
+                echo "${colors[r]}Файл $key_path.ppk оставлен на сервере по пути: $key_path.ppk${colors[x]}"
             fi
-        done
+        else
+            echo "${colors[r]}Ошибка при конвертации ключа в .ppk${colors[x]}"
+        fi
+        break
+    else
+        echo "${colors[r]}Ошибка при создании ключа.${colors[x]}"
+        read -p "Повторить попытку? [y/N]: " retry
+        retry=${retry,,}
+        if [[ $retry != 'y' ]]; then
+            echo "Отмена создания SSH-ключей."
+            exit 1
+        fi
+    fi
+done
 
         # Добавление публичного ключа в файл authorized_keys (с проверкой на дублирование)
         if ! grep -q "$(cat "$key_path.pub")" "$authorizedfile"; then
