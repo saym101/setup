@@ -67,7 +67,7 @@ setup_hostname() {
     local current_hostname=$(hostname)
     echo "Текущее имя хоста: $current_hostname"
 
-    if confirm "${colors[y]}Хотите изменить имя хоста?${colors[x]}" "n"; then
+    if confirm "${colors[y]}Хотите изменить имя хоста?${colors[x]}" (y/N); then
         while true; do
             read -r -p "Введите новое имя хоста: " new_hostname
             [[ -n "$new_hostname" ]] && break
@@ -89,7 +89,7 @@ setup_locale() {
     echo "${colors[g]}Текущая локаль:${colors[x]}"
     locale | grep "^LANG="
 
-    if confirm "${colors[y]}Меняем локаль?${colors[x]}" "n"; then
+    if confirm "${colors[y]}Меняем локаль?${colors[x]}" (y/N); then
         read -r -p "Введите желаемую локаль (по умолчанию ru_RU.UTF-8): " new_locale
         new_locale=${new_locale:-"ru_RU.UTF-8"}
 
@@ -108,7 +108,7 @@ setup_locale() {
 
 # 3. Функция для изменения часового пояса
 setup_timezone() {
-    if confirm "${colors[g]}3] Хотите изменить часовой пояс?${colors[x]}" "n"; then
+    if confirm "${colors[g]}3] Хотите изменить часовой пояс?${colors[x]}" (y/N); then
         timedatectl list-timezones | grep "^Europe/" | nl -s ") " -w 2 | pr -3 -t -w 80
 
         while true; do
@@ -133,10 +133,12 @@ setup_timezone() {
 setup_software() {
     echo "${colors[g]}4] Установка минимального набора ПО${colors[x]}"
 
-    if confirm "${colors[y]}Установить набор стандартных программ?${colors[x]}" "n"; then
-        echo "${colors[r]}Список программ для установки:${colors[x]}"
+    if confirm "${colors[y]}Установить набор нпрограмм?${colors[x]}" (y/N); then
+        echo "${colors[r]}Вот список программ:${colors[x]}"
+        echo
         echo "$standard_packages"
-        read -e -i "$standard_packages" -p "${colors[r]}Отредактируйте список программ:${colors[x]} " user_input
+        echo
+        read -e -i "$standard_packages" -p "${colors[r]}Можно добавить свои или изменить предложенный набор:${colors[x]} " user_input
         apt install -y $user_input || echo "${colors[r]}Ошибка при установке пакетов.${colors[x]}"
         cp /usr/share/mc/syntax/sh.syntax /usr/share/mc/syntax/unknown.syntax
         echo "${colors[y]}Установка завершена.${colors[x]}"
@@ -149,7 +151,7 @@ setup_software() {
 setup_chrony() {
     echo "${colors[g]}5] Настройка Chrony${colors[x]}"
 
-    if confirm "${colors[y]}Хотите настроить Chrony?${colors[x]}" "n"; then
+    if confirm "${colors[y]}Хотите настроить Chrony?${colors[x]}" (y/N); then
         if ! dpkg -s chrony &> /dev/null; then
             echo "${colors[r]}Chrony не установлен. Установите его и повторите попытку.${colors[x]}"
             return
@@ -160,7 +162,10 @@ setup_chrony() {
 
         systemctl restart chrony
         echo "${colors[y]}Chrony настроен и перезапущен.${colors[x]}"
+        echo "${colors[y]}Для синхронизации используется этот сервер:${colors[x]}"
+        echo 
         chronyc sources
+        echo
     else
         echo "${colors[r]}Настройка Chrony отменена.${colors[x]}"
     fi
@@ -355,9 +360,9 @@ change_ssh_port() {
     fi
 }
 
-# 7.2 Функция для настройки UFW
+# 7.2 Функция для настройки брандмауэр UFW
 configure_ufw() {
-    echo "${colors[g]}7.2] Первоначальная настройка UFW...${colors[x]}"
+    echo "${colors[g]}7.2] Первоначальная настройка брандмауэра UFW...${colors[x]}"
     echo
 
     # Сброс настроек по умолчанию
@@ -475,7 +480,7 @@ while true; do
     echo "${colors[r]}Запускайте этот скрипт c правами root. Используя команду su -l${colors[x]}"
     echo "${colors[r]}Задав предварительно пароль для root командой 'sudo passwd root'.${colors[x]}"
     echo
-    echo "${colors[y]}Выберите номер нужного пункта:${colors[x]}"
+    echo "${colors[y]}Выберите номер нужного пункта. По умолчанию везде "НЕТ"${colors[x]}"
     echo "${colors[c]}1.${x}  ${g}Изменить hostname${x}"
     echo "${colors[c]}2.${x}  ${g}Изменить локаль${x}"
     echo "${colors[c]}3.${x}  ${g}Изменить часовой пояс${x}"
