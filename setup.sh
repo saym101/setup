@@ -1,4 +1,4 @@
-4#!/bin/bash
+#!/bin/bash
 clear
 
 # === Переменные ===
@@ -57,8 +57,7 @@ create_home_dir() {
     local username="$1"
     local home_dir="/home/$username"
 
-#   mkdir -p "$home_dir"/{.config,.local/share,Documents,Download,Backup,Music,Pictures,Video}
-    mkdir -p "$home_dir"/{.config,.local/share}    
+    mkdir -p "$home_dir"/{.config,.local/share,Documents,Download,Backup,Music,Pictures,Video}
     touch "$home_dir/.bashrc"
 }
 
@@ -68,7 +67,7 @@ setup_hostname() {
     local current_hostname=$(hostname)
     echo "Текущее имя хоста: $current_hostname"
 
-    if confirm "${colors[y]}Хотите изменить имя хоста?${colors[x]}" "y"; then
+    if confirm "${colors[y]}Хотите изменить имя хоста?${colors[x]}" "n"; then
         while true; do
             read -r -p "Введите новое имя хоста: " new_hostname
             [[ -n "$new_hostname" ]] && break
@@ -137,7 +136,7 @@ setup_software() {
     if confirm "${colors[y]}Установить набор стандартных программ?${colors[x]}" "n"; then
         echo "${colors[r]}Список программ для установки:${colors[x]}"
         echo "$standard_packages"
-        read -e -i "$standard_packages" -p "Отредактируйте список программ: " user_input
+        read -e -i "$standard_packages" -p "${colors[r]}Отредактируйте список программ:${colors[x]} " user_input
         apt install -y $user_input || echo "${colors[r]}Ошибка при установке пакетов.${colors[x]}"
         cp /usr/share/mc/syntax/sh.syntax /usr/share/mc/syntax/unknown.syntax
         echo "${colors[y]}Установка завершена.${colors[x]}"
@@ -185,7 +184,7 @@ setup_ssh_keys() {
     # Запрос на создание ключей
     while true; do
         echo
-        read -r -n 1 -p "${colors[y]} Хотите создать SSH-ключ для доступа к серверу? (y/n): ${colors[x]}" -r
+        read -r -n 1 -p "${colors[y]} Хотите создать новую пару SSH-ключей или оставить как есть? (y/N): ${colors[x]}" -r
         echo
 
         # Установка значений по умолчанию
