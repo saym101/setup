@@ -244,16 +244,19 @@ setup_ssh_keys() {
                 puttygen "$key_path" -o "$key_path.ppk"
                 if [ $? -eq 0 ]; then
                     echo "${colors[y]}Ключ сконвертирован в $key_path.ppk${colors[x]}"
+                    echo "${colors[y]}Данный ключ $key_path.ppk$ нужен для настройки доступа в программе PuTTY/KiTTY по ключу ${colors[x]}"
+                    echo "${colors[y]}Скопируйте текст ниже в файл с расширением .ppk (например, id_$currhostname-$DATE.ppk) на вашем компьютере.${colors[x]}"
+                    echo "${colors[y]}Убедитесь, что копируете текст полностью, который между дефисами, включая строки вроде PuTTY-User-Key-File-2: ssh-rsa и Private-MAC.${colors[x]}"
                     echo
                     echo "${colors[y]}Содержимое файла $key_path.ppk:${colors[x]}"
                     echo "---------------------------------------------"
                     cat "$key_path.ppk"
                     echo "---------------------------------------------"
-                    echo "${colors[y]}Скопируйте текст выше в файл с расширением .ppk (например, id_$currhostname-$DATE.ppk) на вашем компьютере.${colors[x]}"
                     echo
-                    
+                    echo
+                    echo
                     # Запрос на удаление файла
-                    if confirm "${colors[y]}Удалить файл $key_path.ppk с сервера?${colors[x]}" "y"; then
+                    if confirm "${colors[y]}Вы можете удалить файл $key_path.ppk с сервера или оставить. Удалить?${colors[x]}" "y"; then
                         rm "$key_path.ppk"
                         echo "${colors[y]}Файл $key_path.ppk удалён с сервера.${colors[x]}"
                     else
