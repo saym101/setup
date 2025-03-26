@@ -151,10 +151,26 @@ setup_software() {
 setup_chrony() {
     echo "${colors[g]}5] Настройка Chrony${colors[x]}"
 
+    # Проверка статуса Chrony и вывод текущих источников
+    if dpkg -s chrony &> /dev/null; then
+        echo "${colors[y]}Chrony установлен.${colors[x]}"
+        echo "${colors[y]}Текущие источники синхронизации:${colors[x]}"
+        echo
+        chronyc sources
+        echo
+    else
+        echo "${colors[r]}Chrony не установлен.${colors[x]}"
+    fi
+
+    # Вывод списка NTP-серверов из конфигурации
+    echo "${colors[y]}Список NTP-серверов из конфигурации (/etc/chrony/chrony.conf):${colors[x]}"
+    echo
+    grep "^pool" /etc/chrony/chrony.conf || echo "${colors[r]}NTP-серверы в конфигурации не найдены.${colors[x]}"
+    echo
+
+    # Запрос на настройку Chrony
     if confirm "${colors[y]}Хотите настроить Chrony?${colors[x]}" "n"; then
-        if dpkg -s chrony &> /dev/null; then
-            echo "${colors[y]}Chrony уже установлен.${colors[x]}"
-        else
+        if ! dpkg -s chrony &> /dev/null; then
             echo "${colors[r]}Chrony не установлен.${colors[x]}"
             if confirm "${colors[y]}Установить Chrony?${colors[x]}" "y"; then
                 apt install -y chrony || {
@@ -173,7 +189,7 @@ setup_chrony() {
 
         systemctl restart chrony
         echo "${colors[y]}Chrony настроен и перезапущен.${colors[x]}"
-        echo "${colors[y]}Для синхронизации используется этот сервер:${colors[x]}"
+        echo "${colors[y]}Обновлённые источники синхронизации:${colors[x]}"
         echo 
         chronyc sources
         echo
