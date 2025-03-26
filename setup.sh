@@ -57,7 +57,8 @@ create_home_dir() {
     local username="$1"
     local home_dir="/home/$username"
 
-    mkdir -p "$home_dir"/{.config,.local/share,Documents,Download,Backup,Music,Pictures,Video}
+#   mkdir -p "$home_dir"/{.config,.local/share,Documents,Download,Backup,Music,Pictures,Video}
+    mkdir -p "$home_dir"/{.config,.local/share}    
     touch "$home_dir/.bashrc"
 }
 
