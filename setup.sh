@@ -666,26 +666,39 @@ add_new_user() {
     fi
 }
 
-# 10. Функция для очистки apt кэша
+# 10. Функция для очистки apt кэша и истории команд
 clean_apt_cache() {
-    echo "${colors[g]}10] Очищаем apt кэш${colors[x]}"
-    if confirm "${colors[y]}Хотите очистить apt кэш?${colors[x]}" "n"; then
+    echo "${colors[g]}10] Очистка системного кэша и истории команд${colors[x]}"
+    if confirm "${colors[y]}Хотите выполнить очистку кэша и истории?${colors[x]}" "n"; then
         echo "${colors[y]}Начата очистка apt кэша...${colors[x]}"
-        
-        # Очищаем кэш apt, перенаправляя stderr в лог (но не на экран)
         apt clean 2>/dev/null
         
-        # Дополнительная очистка других кэш-директорий
-        echo "Очистка /var/cache/apt/archives/..."
+        echo "Очистка /var/cache/apt/archives/"
         rm -rf /var/cache/apt/archives/*
         
-        echo "Очистка /var/lib/apt/lists/..."
+        echo "Очистка /var/lib/apt/lists/"
         rm -rf /var/lib/apt/lists/*
         
-        echo "${colors[y]}Кэш apt и временные файлы успешно очищены${colors[x]}"
+        # Очистка истории команд
+        echo "Очистка истории команд"
+        if [ -n "$BASH" ]; then
+            # Очистка истории текущей сессии
+            history -c
+            
+            # Очистка файла истории (если существует)
+            if [ -f ~/.bash_history ]; then
+                cat /dev/null > ~/.bash_history
+            fi
+            
+            echo "${colors[y]}История команд текущей сессии и файл .bash_history очищены${colors[x]}"
+        else
+            echo "${colors[y]}Очистка истории доступна только в bash${colors[x]}"
+        fi
+        
+        echo "${colors[y]}Кэш apt и история команд успешно очищены${colors[x]}"
         echo "Дата очистки: $(date)"
     else
-        echo "${colors[r]}Очистка кэша отменена пользователем${colors[x]}"
+        echo "${colors[r]}Очистка отменена${colors[x]}"
     fi
 }
 
