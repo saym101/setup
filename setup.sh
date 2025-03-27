@@ -17,10 +17,16 @@ authorizedfile="/root/.ssh/authorized_keys"
 sshconfigfile="/etc/ssh/sshd_config"
 DATE=$(date "+%Y-%m-%d")
 standard_packages="curl gnupg mc ufw htop iftop net-tools ca-certificates lynx openssh-server openssh-client chrony"
-chrony_servers="pool 0.ru.pool.ntp.org
-pool 1.ru.pool.ntp.org
-pool 2.ru.pool.ntp.org
-pool 3.ru.pool.ntp.org"
+chrony_servers="
+0.ru.pool.ntp.org
+1.ru.pool.ntp.org
+2.ru.pool.ntp.org
+3.ru.pool.ntp.org"
+# Читаем текущий порт из sshd_config при запуске
+ssh_port=$(grep -E '^[[:space:]]*Port[[:space:]]+[0-9]+' "$sshconfigfile" | awk '{print $2}' | head -n 1)
+if [ -z "$ssh_port" ]; then
+    ssh_port=22  # Если порт не указан в конфиге, предполагаем 22
+fi
 
 # Логирование в текущую директорию
 LOG_FILE="${PWD}/$(basename "$0" .sh)_${DATE}.log"
@@ -52,15 +58,6 @@ confirm() {
     [[ "$answer" == "y" ]]
 }
 
-# Функция создания домашнего каталога с папками
-create_home_dir() {
-    local username="$1"
-    local home_dir="/home/$username"
-
-    mkdir -p "$home_dir"/{.config,.local/share,Documents,Download,Backup,Music,Pictures,Video}
-    touch "$home_dir/.bashrc"
-}
-
 # 1. Функция для установки hostname
 setup_hostname() {
     echo "${colors[g]}1] Установка hostname${colors[x]}"
@@ -70,8 +67,11 @@ setup_hostname() {
     if confirm "${colors[y]}Хотите изменить имя хоста?${colors[x]}" "n"; then
         while true; do
             read -r -p "Введите новое имя хоста: " new_hostname
-            [[ -n "$new_hostname" ]] && break
-            echo "${colors[r]}Имя хоста не может быть пустым.${colors[x]}"
+            if [[ -n "$new_hostname" && "$new_hostname" =~ ^[a-zA-Z0-9-]+$ ]]; then
+                break
+            else
+                echo "${colors[r]}Имя хоста должно содержать только буквы, цифры и дефисы, и не быть пустым.${colors[x]}"
+            fi
         done
 
         echo "$new_hostname" > /etc/hostname
@@ -87,20 +87,60 @@ setup_hostname() {
 setup_locale() {
     echo "${colors[g]}2] Устанавливаем корректную локаль...${colors[x]}"
     echo "${colors[g]}Текущая локаль:${colors[x]}"
-    locale | grep "^LANG="
+    local current_locale=$(locale | grep "^LANG=" | cut -d'=' -f2 | tr -d '"')
+    echo "LANG=$current_locale"
 
     if confirm "${colors[y]}Меняем локаль?${colors[x]}" "n"; then
-        read -r -p "Введите желаемую локаль (по умолчанию ru_RU.UTF-8): " new_locale
-        new_locale=${new_locale:-"ru_RU.UTF-8"}
+        # Предлагаемая по умолчанию локаль
+        local default_locale="ru_RU.UTF-8"
+
+        # Проверяем, совпадает ли текущая локаль с предлагаемой по умолчанию
+        if [ "$current_locale" = "$default_locale" ]; then
+            echo "${colors[y]}Текущая локаль уже установлена как '$default_locale'.${colors[x]}"
+            if confirm "${colors[y]}Всё равно хотите ввести другую локаль?${colors[x]}" "n"; then
+                # Если пользователь хочет сменить, переходим к вводу
+                :
+            else
+                echo "${colors[r]}Изменение локали отменено, так как текущая локаль уже соответствует умолчанию.${colors[x]}"
+                return
+            fi
+        fi
+
+        while true; do
+            read -r -p "Введите желаемую локаль (по умолчанию $default_locale, Enter для отмены): " new_locale
+
+            # Если строка пустая, считаем это отказом
+            if [ -z "$new_locale" ]; then
+                echo "${colors[r]}Изменение локали отменено (ввод пустой).${colors[x]}"
+                return
+            fi
+
+            # Проверяем, доступна ли введённая локаль
+            if locale -a | grep -Fx "$new_locale" > /dev/null; then
+                # Если локаль найдена, проверяем, не совпадает ли она с текущей
+                if [ "$new_locale" = "$current_locale" ]; then
+                    echo "${colors[y]}Локаль '$new_locale' уже установлена в системе.${colors[x]}"
+                    if confirm "${colors[y]}Всё равно применить её заново?${colors[x]}" "n"; then
+                        break
+                    else
+                        echo "${colors[r]}Изменение локали отменено.${colors[x]}"
+                        return
+                    fi
+                else
+                    break
+                fi
+            else
+                echo "${colors[r]}Локаль '$new_locale' не найдена. Используйте 'locale -a' для списка доступных локалей.${colors[x]}"
+            fi
+        done
 
         if grep -qi "Debian" /etc/os-release || grep -qi "Ubuntu" /etc/os-release; then
             echo "LANG=\"$new_locale\"" > /etc/default/locale
+            echo "${colors[y]}Локаль '$new_locale' успешно установлена.${colors[x]}"
         else
             echo "${colors[r]}Ваша ОС не поддерживается для автоматической установки локали.${colors[x]}"
             return
         fi
-
-        echo "${colors[y]}Локаль '$new_locale' успешно установлена.${colors[x]}"
     else
         echo "${colors[r]}Отмена установки локализации.${colors[x]}"
     fi
@@ -108,22 +148,38 @@ setup_locale() {
 
 # 3. Функция для изменения часового пояса
 setup_timezone() {
-    if confirm "${colors[g]}3] Хотите изменить часовой пояс?${colors[x]}" "n"; then
+    echo "${colors[g]}3] Настройка часового пояса${colors[x]}"
+    # Вывод текущего часового пояса
+    local current_timezone=$(timedatectl | grep "Time zone" | awk '{print $3}')
+    if [ -z "$current_timezone" ]; then
+        current_timezone="Не определён"
+    fi
+    echo "${colors[g]}Текущий часовой пояс: $current_timezone${colors[x]}"
+
+    if confirm "${colors[y]}Хотите изменить часовой пояс?${colors[x]}" "n"; then
         timedatectl list-timezones | grep "^Europe/" | nl -s ") " -w 2 | pr -3 -t -w 80
 
         while true; do
-            read -r -p "Введите номер часового пояса (по умолчанию 35 - Europe/Moscow): " choice
-            choice=${choice:-35}
+            read -r -p "Введите номер часового пояса (по умолчанию 35 - Europe/Moscow, Enter для отмены): " choice
 
+            # Если строка пустая, считаем это отказом
+            if [ -z "$choice" ]; then
+                echo "${colors[r]}Изменение часового пояса отменено (ввод пустой).${colors[x]}"
+                return
+            fi
+
+            # Проверяем, является ли ввод числом
             if [[ "$choice" =~ ^[0-9]+$ ]]; then
                 selected_timezone=$(timedatectl list-timezones | grep "^Europe/" | awk -v choice="$choice" "NR==choice {print}")
-                [[ -n "$selected_timezone" ]] && break
+                if [ -n "$selected_timezone" ]; then
+                    break
+                fi
             fi
             echo "${colors[r]}Некорректный ввод. Введите номер из списка.${colors[x]}"
         done
 
         timedatectl set-timezone "$selected_timezone"
-        echo "${colors[y]}Часовой пояс изменен на $selected_timezone.${colors[x]}"
+        echo "${colors[y]}Часовой пояс изменён на $selected_timezone.${colors[x]}"
     else
         echo "${colors[r]}Процедура изменения часового пояса отменена.${colors[x]}"
     fi
@@ -138,7 +194,14 @@ setup_software() {
         echo
         echo "$standard_packages"
         echo
-        read -e -i "$standard_packages" -p "${colors[r]}Можно добавить свои или изменить предложенный набор:${colors[x]} " user_input
+        while true; do
+            read -e -i "$standard_packages" -p "${colors[r]}Можно добавить свои или изменить предложенный набор:${colors[x]} " user_input
+            if [[ -n "$user_input" && "$user_input" =~ ^[a-zA-Z0-9[:space:]-]+$ ]]; then
+                break
+            else
+                echo "${colors[r]}Список пакетов не может быть пустым и должен содержать только буквы, цифры, пробелы и дефисы.${colors[x]}"
+            fi
+        done
         apt install -y $user_input || echo "${colors[r]}Ошибка при установке пакетов.${colors[x]}"
         cp /usr/share/mc/syntax/sh.syntax /usr/share/mc/syntax/unknown.syntax
         echo "${colors[y]}Установка завершена.${colors[x]}"
@@ -152,8 +215,8 @@ setup_chrony() {
     echo "${colors[g]}5] Настройка Chrony${colors[x]}"
 
     # Проверка, установлен ли Chrony
-    if ! command -v chronyc >/dev/null 2>&1; then
-        echo "${colors[r]}Chrony не установлен.${colors[x]}"
+    if ! command -v chronyc >/dev/null 2>&1 || ! [ -f /etc/chrony/chrony.conf ]; then
+        echo "${colors[r]}Chrony не установлен или конфигурационный файл отсутствует.${colors[x]}"
         if confirm "${colors[y]}Установить Chrony?${colors[x]}" "y"; then
             apt update && apt install -y chrony || {
                 echo "${colors[r]}Ошибка при установке Chrony.${colors[x]}"
@@ -195,6 +258,10 @@ setup_chrony() {
         echo "${colors[r]}Служба chrony не запущена. Пытаемся запустить...${colors[x]}"
         systemctl start chrony
         sleep 2
+        if ! systemctl is-active --quiet chrony; then
+            echo "${colors[r]}Не удалось запустить службу chrony.${colors[x]}"
+            return
+        fi
     fi
 
     echo "${colors[y]}Текущие источники синхронизации:${colors[x]}"
@@ -207,53 +274,48 @@ setup_chrony() {
 
     # Запрос на смену серверов
     if confirm "${colors[y]}Хотите сменить NTP-серверы в настройках?${colors[x]}" "n"; then
-        # Создаем резервную копию конфигурации
         local backup_file="/etc/chrony/chrony.conf.bak_$(date +%Y%m%d_%H%M%S)"
         cp /etc/chrony/chrony.conf "$backup_file"
         echo "${colors[y]}Создана резервная копия конфигурации: $backup_file${colors[x]}"
 
-        # Подготавливаем серверы по умолчанию для редактирования
         local default_servers=$(echo "$chrony_servers" | tr '\n' '|' | sed 's/|$//')
-        
         echo "${colors[y]}Текущие серверы (для редактирования):${colors[x]}"
         echo "${colors[c]}Введите новые NTP-серверы, разделяя их пробелом${colors[x]}"
         echo "${colors[c]}По умолчанию: ${default_servers}${colors[x]}"
-        read -e -i "$default_servers" -p "${colors[y]}Ваш выбор: ${colors[x]}" input_servers
+        while true; do
+            read -e -i "$default_servers" -p "${colors[y]}Ваш выбор: ${colors[x]}" input_servers
+            if [[ -n "$input_servers" && "$input_servers" =~ ^[a-zA-Z0-9.-[:space:]]+$ ]]; then
+                break
+            else
+                echo "${colors[r]}Серверы должны содержать только буквы, цифры, точки и дефисы, и не быть пустыми.${colors[x]}"
+            fi
+        done
         
-        # Обрабатываем ввод
         local new_servers=$(echo "$input_servers" | tr '|' '\n' | tr ' ' '\n' | grep -v '^$')
-
         if [ -n "$new_servers" ]; then
-            # Создаем временный файл для новой конфигурации
             local temp_conf=$(mktemp)
-            
-            # Копируем все, кроме строк с pool, в временный файл
             grep -v "^pool" /etc/chrony/chrony.conf > "$temp_conf"
-            
-            # Добавляем новые серверы с "pool" и "iburst"
             echo "$new_servers" | while IFS= read -r server; do
                 if [ -n "$server" ]; then
                     echo "pool $server iburst" >> "$temp_conf"
                 fi
             done
-
-            # Заменяем оригинальный файл конфигурации
             mv "$temp_conf" /etc/chrony/chrony.conf
             chmod 644 /etc/chrony/chrony.conf
 
-            # Перезапускаем Chrony и проверяем результат
             systemctl restart chrony && {
-                echo "${colors[y]}NTP-серверы обновлены и Chrony перезапущен.${colors[x]}"
-                echo "${colors[y]}Обновлённые источники синхронизации:${colors[x]}"
-                echo
-                chronyc sources
-                echo
-                echo "${colors[y]}Новые серверы в конфигурации:${colors[x]}"
-                grep "^pool" /etc/chrony/chrony.conf
-                echo
+                if systemctl is-active --quiet chrony; then
+                    echo "${colors[y]}NTP-серверы обновлены и Chrony перезапущен.${colors[x]}"
+                    echo "${colors[y]}Обновлённые источники синхронизации:${colors[x]}"
+                    chronyc sources
+                    echo "${colors[y]}Новые серверы в конфигурации:${colors[x]}"
+                    grep "^pool" /etc/chrony/chrony.conf
+                else
+                    echo "${colors[r]}Chrony перезапущен, но служба не активна.${colors[x]}"
+                fi
             } || echo "${colors[r]}Ошибка при перезапуске Chrony.${colors[x]}"
         else
-            echo "${colors[r]}Серверы не введены, настройки остались без изменений.${colors[x]}"
+            echo "${colors[r]}Серверы не введены (пустой ввод), настройки остались без изменений.${colors[x]}"
         fi
     else
         echo "${colors[r]}Смена серверов отменена.${colors[x]}"
@@ -264,10 +326,8 @@ setup_chrony() {
 setup_ssh_keys() {
     echo "${colors[g]}6] Настройка доступа через SSH-ключи. Не закрывайте текущее окно SSH пока не убедитесь что доступ по ключу работает!!!${colors[x]}"
 
-    # Проверка наличия файла authorized_keys
     if [ -f "$authorizedfile" ]; then
         echo "${colors[y]}Найден файл публичного ключа для удаленного доступа: $authorizedfile ${colors[x]}"
-        echo
         local currsshauthkeys="$(cat $authorizedfile)"
         echo "${colors[y]}Его текущее содержимое: ${colors[x]}"
         echo "$currsshauthkeys"
@@ -275,65 +335,33 @@ setup_ssh_keys() {
         echo "${colors[r]}Файл авторизованных ключей не найден. Он будет создан при необходимости.${colors[x]}"
     fi
 
-    # Запрос на создание ключей
-    while true; do
-        echo
-        read -r -n 1 -p "${colors[y]} Хотите создать новую пару SSH-ключей или оставить как есть? (y/N): ${colors[x]}" -r
-        echo
-
-        # Установка значений по умолчанию
-        if [[ -z $REPLY ]]; then
-            REPLY='n'
-        fi
-
-        # Проверка на валидность ввода
-        if [[ $REPLY =~ ^[YyNn]$ ]]; then
-            break
-        else
-            echo "${colors[r]}Ошибка: пожалуйста, введите 'y' для да или 'n' для нет.${colors[x]}"
-        fi
-    done
-
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        # Получение данных от пользователя для нового ключа
+    if confirm "${colors[y]}Хотите создать новую пару SSH-ключей или оставить как есть?${colors[x]}" "n"; then
         while true; do
             read -r -p "${colors[y]}Введите адрес своей электронной почты для привязки к SSH-ключу: ${colors[x]}" email
-
-            # Валидация email
-            if [[ "$email" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+            if [[ -n "$email" && "$email" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
                 break
             else
-                echo "${colors[r]}Ошибка: введён некорректный email. Пожалуйста, введите корректный адрес электронной почты.${colors[x]}"
+                echo "${colors[r]}Ошибка: введите корректный и непустой email (например, user@example.com).${colors[x]}"
             fi
         done
 
-        # Запрашиваем путь к директории с установкой пути по умолчанию
         read -r -p "${colors[y]}Введите путь к директории, где будут созданы ключи (по умолчанию ~/.ssh): ${colors[x]}" directory
-
-        # Используем путь по умолчанию, если пользователь нажал Enter
         if [[ -z "$directory" ]]; then
             directory="$HOME/.ssh"
         else
-            # Заменяем ~ на полный путь
             directory="${directory/#\~/$HOME}"
         fi
 
-        # Проверка существования директории
         if [ ! -d "$directory" ]; then
             echo "Директория не существует. Создаем её..."
             mkdir -p "$directory"
         fi
 
-        # Создание SSH-ключей
         while true; do
             key_path="$directory/id_$currhostname-$DATE"
             ssh-keygen -t rsa -b 4096 -C "$email" -f "$key_path" -N ""
-
-            # Проверка успешности создания ключа
             if [ $? -eq 0 ]; then
                 echo "${colors[r]}Ключ успешно создан по пути: $key_path ${colors[x]}"
-                
-                # Установка putty-tools для конвертации
                 apt install -y putty-tools > /dev/null 2>&1
                 puttygen "$key_path" -o "$key_path.ppk"
                 if [ $? -eq 0 ]; then
@@ -341,15 +369,10 @@ setup_ssh_keys() {
                     echo "${colors[y]}Данный ключ $key_path.ppk нужен для настройки доступа в программе PuTTY/KiTTY по ключу ${colors[x]}"
                     echo "${colors[y]}Скопируйте текст ниже в файл с расширением .ppk (например, id_$currhostname-$DATE.ppk) на вашем компьютере.${colors[x]}"
                     echo "${colors[y]}Убедитесь, что копируете текст полностью, который между дефисами, включая строки вроде PuTTY-User-Key-File-2: ssh-rsa и Private-MAC.${colors[x]}"
-                    echo
                     echo "${colors[y]}Содержимое файла $key_path.ppk:${colors[x]}"
                     echo "---------------------------------------------"
                     cat "$key_path.ppk"
                     echo "---------------------------------------------"
-                    echo
-                    echo
-                    echo
-                    # Запрос на удаление файла
                     if confirm "${colors[y]}Вы можете удалить файл $key_path.ppk с сервера или оставить. Удалить?${colors[x]}" "y"; then
                         rm "$key_path.ppk"
                         echo "${colors[y]}Файл $key_path.ppk удалён с сервера.${colors[x]}"
@@ -362,16 +385,13 @@ setup_ssh_keys() {
                 break
             else
                 echo "${colors[r]}Ошибка при создании ключа.${colors[x]}"
-                read -p "Повторить попытку? [y/N]: " retry
-                retry=${retry,,}
-                if [[ $retry != 'y' ]]; then
+                if ! confirm "Повторить попытку?" "y"; then
                     echo "Отмена создания SSH-ключей."
-                    exit 1
+                    return 1
                 fi
             fi
         done
 
-        # Добавление публичного ключа в файл authorized_keys (с проверкой на дублирование)
         if ! grep -q "$(cat "$key_path.pub")" "$authorizedfile"; then
             cat "$key_path.pub" >> "$authorizedfile"
             chmod 600 "$authorizedfile"
@@ -381,8 +401,6 @@ setup_ssh_keys() {
         fi
 
         echo "${colors[y]}Настройка безопасности доступа root только через SSH.${colors[x]}"
-        echo
-        # Изменяем первые четыре вхождения директив
         sed -i '0,/^#.*PermitRootLogin/s/^#\([[:space:]]*PermitRootLogin.*\)/\1/' "$sshconfigfile"
         sed -i '0,/^#.*PasswordAuthentication/s/^#\([[:space:]]*PasswordAuthentication.*\)/\1/' "$sshconfigfile"
         sed -i '0,/^#.*PermitEmptyPasswords/s/^#\([[:space:]]*PermitEmptyPasswords.*\)/\1/' "$sshconfigfile"
@@ -391,90 +409,121 @@ setup_ssh_keys() {
         echo "${colors[y]}Изменено 'PermitRootLogin' на 'prohibit-password', 'PasswordAuthentication' на 'no', 'PermitEmptyPasswords' на 'no'. Вход по паролю для root отключен.${colors[x]}"
         echo "${colors[y]}Изменено 'PubkeyAuthentication' на 'yes'. Аутентификация по ключам включена.${colors[x]}"
 
-        # Перезапуск SSHD
         echo "${colors[r]}Перезапускаем SSH...${colors[x]}"
         systemctl restart ssh
-        echo
         echo "${colors[y]}Настройка завершена! Убедитесь, что ключи правильно добавлены для доступа.${colors[x]}"
-        echo
     else
         echo "${colors[r]}Создание SSH-ключей отменено. Продолжаем выполнение скрипта.${colors[x]}"
-        echo
     fi
 }
 
 # 7. Функция для изменения порта SSH
 change_ssh_port() {
-    echo "${colors[g]}7.1] Изменение порта для SSH...${colors[x]}"
+    echo "${colors[g]}7] Изменение порта для SSH...${colors[x]}"
     echo
 
-    # Получение текущего значения порта SSH
-    local current_ssh_port=$(grep '^ *Port ' "$sshconfigfile" | awk '{print $2}')
+    local current_ssh_port=$(grep -E '^[[:space:]]*#?Port[[:space:]]+[0-9]+' "$sshconfigfile" | awk '{print $2}' | head -n 1)
+    if [ -z "$current_ssh_port" ]; then
+        current_ssh_port=22
+        echo "${colors[y]}Порт SSH не указан в конфигурации. Предполагается стандартный порт 22.${colors[x]}"
+    else
+        echo "${colors[g]}Текущий порт SSH из конфигурации: $current_ssh_port${colors[x]}"
+    fi
 
-    # Проверка существования строки 'Port'
-    if grep -q "^ *Port " "$sshconfigfile"; then
+    if grep -qE '^[[:space:]]*#?Port[[:space:]]+[0-9]+' "$sshconfigfile"; then
         echo "${colors[g]}Проверяем, закомментирована строка 'Port' или нет...${colors[x]}"
-
-        if grep -q "^ *Port " "$sshconfigfile"; then
-            echo "На данный момент комментирование 'Port' уже было снято."
-            echo "Текущий порт SSH: $current_ssh_port"
+        if grep -qE '^[[:space:]]*Port[[:space:]]+[0-9]+' "$sshconfigfile"; then
+            echo "Строка 'Port' уже раскомментирована."
         else
-            echo "Строка с номером порта была закомментирована."
-            echo "Снимаем комментарий."
-            sed -i "/^ *#Port/c\Port 22" "$sshconfigfile"
-            echo "Порт установлен на 22 используемый SSH по умолчанию"
+            echo "Строка 'Port' закомментирована. Раскомментируем и установим порт 22."
+            sed -i 's/^[[:space:]]*#\(Port[[:space:]]*\)[0-9]*/\122/' "$sshconfigfile"
             current_ssh_port=22
         fi
     else
-        echo "'Port' не найден. Добавляем его и устанавливаем на 22."
+        echo "'Port' не найден в конфигурации. Добавляем его с значением 22."
+        if [ -n "$(tail -c 1 "$sshconfigfile")" ]; then
+            echo "" >> "$sshconfigfile"
+        fi
         echo "Port 22" >> "$sshconfigfile"
         current_ssh_port=22
     fi
 
-    # Запрос на изменение порта
-    read -p "${colors[y]}Изменить текущий порт $current_ssh_port на случайный из диапазона 1025-49150? [y/N]: ${colors[x]}" -n 1 -r
-    echo
+    echo "${colors[y]}Текущий порт SSH: $current_ssh_port${colors[x]}"
+    echo "${colors[c]}Введите новый порт (22 или 1025-49150) или 'y' для случайного порта (1025-49150), или нажмите Enter для отмены:${colors[x]}"
+    read -r -p "${colors[y]}Ваш выбор: ${colors[x]}" new_port_input
 
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        # Смена порта на случайный
+    if [ -z "$new_port_input" ]; then
+        echo "${colors[r]}Изменение порта отменено. Оставляем текущий порт SSH: $current_ssh_port.${colors[x]}"
+        ssh_port=$current_ssh_port
+        return $ssh_port
+    elif [[ "$new_port_input" =~ ^[Yy]$ ]]; then
         local random_port=$(( ( RANDOM % 48126 ) + 1025 ))
-        sed -i "/^ *Port /c\Port $random_port" "$sshconfigfile"
-        echo "Порт изменён на $random_port."
+        sed -i "s/^[[:space:]]*Port[[:space:]]\+[0-9]*/Port $random_port/" "$sshconfigfile"
+        echo "${colors[y]}Порт изменён на случайный: $random_port.${colors[x]}"
         echo "Перезапускаем SSH для применения изменений..."
         systemctl restart ssh
-        return $random_port
+        ssh_port=$random_port
+        return $ssh_port
+    elif [[ "$new_port_input" =~ ^[0-9]+$ ]]; then
+        if [ "$new_port_input" -eq 22 ] || { [ "$new_port_input" -ge 1025 ] && [ "$new_port_input" -le 49150 ]; }; then
+            sed -i "s/^[[:space:]]*Port[[:space:]]\+[0-9]*/Port $new_port_input/" "$sshconfigfile"
+            echo "${colors[y]}Порт изменён на: $new_port_input.${colors[x]}"
+            echo "Перезапускаем SSH для применения изменений..."
+            systemctl restart ssh
+            ssh_port=$new_port_input
+            return $ssh_port
+        else
+            echo "${colors[r]}Ошибка: порт должен быть 22 или в диапазоне 1025-49150. Оставляем текущий порт: $current_ssh_port.${colors[x]}"
+            ssh_port=$current_ssh_port
+            return $ssh_port
+        fi
     else
-        echo "Оставляем текущий порт SSH: $current_ssh_port."
-        return $current_ssh_port
+        echo "${colors[r]}Ошибка: введите 'y' для случайного порта или число (22 или 1025-49150). Оставляем текущий порт: $current_ssh_port.${colors[x]}"
+        ssh_port=$current_ssh_port
+        return $ssh_port
     fi
 }
 
-# 7.2 Функция для настройки брандмауэр UFW
+# 8 Функция для настройки брандмауэр UFW
 configure_ufw() {
-    echo "${colors[g]}7.2] Первоначальная настройка брандмауэра UFW...${colors[x]}"
+    echo "${colors[g]}8] Первоначальная настройка брандмауэра UFW...${colors[x]}"
     echo
 
-    # Сброс настроек по умолчанию
+    local active_ssh_port=$(ss -tln | awk '$1 == "LISTEN" {split($4, a, ":"); if (a[2] ~ /^[0-9]+$/) print a[2]}' | grep -E '^(22|[1-4][0-9]{4})$' | head -n 1)
+    if [ -z "$active_ssh_port" ]; then
+        active_ssh_port=$(grep -E '^[[:space:]]*Port[[:space:]]+[0-9]+' "$sshconfigfile" | awk '{print $2}' | head -n 1)
+        if [ -z "$active_ssh_port" ]; then
+            active_ssh_port=22
+            echo "${colors[y]}Не удалось определить активный порт SSH. Предполагается стандартный порт 22.${colors[x]}"
+        else
+            echo "${colors[y]}Обнаружен порт SSH из конфигурации: $active_ssh_port${colors[x]}"
+        fi
+    else
+        echo "${colors[y]}Обнаружен активный порт SSH: $active_ssh_port${colors[x]}"
+    fi
+
+    local session_port=""
+    if [ -n "$SSH_CONNECTION" ]; then
+        session_port=$(echo "$SSH_CONNECTION" | awk '{print $4}')
+        echo "${colors[y]}Порт текущей SSH-сессии: $session_port${colors[x]}"
+    fi
+
+    echo "${colors[y]}Настройка UFW для порта SSH из скрипта: $ssh_port${colors[x]}"
+
     echo "Сброс настроек UFW по умолчанию"
     echo
     yes | ufw reset
 
-    # Получение текущего порта SSH
-    local sshport=$1
-
-    # Настройка UFW
-    if [[ $sshport -eq 22 ]]; then
-        echo "Оставляем 22 порт открытым..."
-        ufw allow 22
-        local port_status="Порт 22 открыт."
-    else
-        echo "Закрываем 22 порт и открываем порт $sshport..."
-        ufw deny 22
-        ufw allow "$sshport"
-        local port_status="Порт 22 закрыт, открыт порт $sshport."
+    echo "Открываем порт 22, порт $ssh_port и активный порт $active_ssh_port..."
+    ufw allow 22
+    ufw allow "$ssh_port"
+    ufw allow "$active_ssh_port"
+    if [ -n "$session_port" ] && [ "$session_port" -ne "$ssh_port" ] && [ "$session_port" -ne "$active_ssh_port" ] && [ "$session_port" -ne 22 ]; then
+        ufw allow "$session_port"
+        echo "${colors[y]}Дополнительно открыт порт текущей сессии: $session_port${colors[x]}"
     fi
+    local port_status="Порт 22, порт $ssh_port и активный порт $active_ssh_port открыты."
 
-    # Включение UFW и вывод статуса
     echo
     echo "Включаем UFW..."
     ufw --force enable
@@ -485,78 +534,173 @@ configure_ufw() {
     echo
     echo "$port_status"
 
-    # Проверка подключения по новому порту
     echo
-    echo "Настройки применены. Пожалуйста, убедитесь, что вы можете подключиться по новому порту SSH."
-    echo
+    echo "Настройки применены. Пожалуйста, прежде чем завершить текущую сессию SSH, убедитесь, что вы можете подключиться по порту SSH $ssh_port."
+    if [ "$ssh_port" -ne 22 ] || [ "$active_ssh_port" -ne 22 ]; then
+        echo
+        if confirm "${colors[y]}Порт 22 закрываем?${colors[x]}" "n"; then
+            ufw deny 22
+            echo "${colors[y]}Порт 22 закрыт. Остались открыты порт $ssh_port и активный порт $active_ssh_port.${colors[x]}"
+            if [ -n "$session_port" ] && [ "$session_port" -ne "$ssh_port" ] && [ "$session_port" -ne "$active_ssh_port" ]; then
+                echo "${colors[y]}Порт текущей сессии $session_port также остаётся открыт.${colors[x]}"
+            fi
+            echo
+            echo "Проверка состояния UFW после закрытия порта 22:"
+            ufw status verbose
+        else
+            echo "${colors[r]}Оставляем порт 22 открытым вместе с $ssh_port и $active_ssh_port.${colors[x]}"
+            if [ -n "$session_port" ] && [ "$session_port" -ne "$ssh_port" ] && [ "$session_port" -ne "$active_ssh_port" ] && [ "$session_port" -ne 22 ]; then
+                echo "${colors[r]}Порт текущей сессии $session_port также остаётся открыт.${colors[x]}"
+            fi
+            echo "${colors[r]}Не забудьте позже закрыть порт 22 вручную для повышения безопасности!${colors[x]}"
+        fi
+    else
+        echo "${colors[y]}Порт SSH остался 22, дополнительных действий не требуется.${colors[x]}"
+    fi
 }
 
-# 8. Функция для добавления нового пользователя
+# 9. Функция для добавления нового пользователя
 add_new_user() {
-    echo "${colors[g]}8] Добавление пользователя без прав root.${colors[x]}"
+    echo "${colors[g]}9] Добавление пользователя без прав root${colors[x]}"
     if confirm "Хотите добавить нового пользователя?" "n"; then
         while true; do
             read -r -p "Введите имя пользователя: " new_user
+            
+            # Проверка на пустоту
+            if [ -z "$new_user" ]; then
+                echo "${colors[r]}Ошибка: имя пользователя не может быть пустым.${colors[x]}"
+                continue
+            fi
+            
+            # Проверка на допустимые символы
+            if [[ ! "$new_user" =~ ^[a-zA-Z0-9_]+$ ]]; then
+                echo "${colors[r]}Ошибка: имя должно содержать только буквы, цифры и '_'.${colors[x]}"
+                continue
+            fi
+            
+            # Проверка на существующего пользователя
             if id -u "$new_user" >/dev/null 2>&1; then
-                echo "${colors[r]}Пользователь '$new_user' уже существует. Введите другое имя.${colors[x]}"
-            else
+                echo "${colors[r]}Ошибка: пользователь '$new_user' уже существует.${colors[x]}"
+                continue
+            fi
+            
+            break
+        done
+
+        while true; do
+            read -s -r -p "Введите пароль для пользователя '$new_user': " new_user_password
+            echo
+            if [ -n "$new_user_password" ]; then
                 break
+            else
+                echo "${colors[r]}Ошибка: пароль не может быть пустым.${colors[x]}"
             fi
         done
 
-        read -s -r -p "Введите пароль для пользователя '$new_user': " new_user_password
-        echo
-        read -s -r -p "Повторите пароль: " new_user_password_confirm
-        echo
+        while true; do
+            read -s -r -p "Повторите пароль: " new_user_password_confirm
+            echo
+            if [ "$new_user_password" = "$new_user_password_confirm" ]; then
+                break
+            else
+                echo "${colors[r]}Ошибка: пароли не совпадают. Повторите ввод.${colors[x]}"
+            fi
+        done
 
-        if [[ "$new_user_password" != "$new_user_password_confirm" ]]; then
-            echo "${colors[r]}Пароли не совпадают. Отмена создания пользователя.${colors[x]}"
+        useradd -m -s /bin/bash "$new_user"
+        echo "$new_user:$new_user_password" | chpasswd
+        echo "${colors[y]}Пользователь '$new_user' создан с домашней директорией /home/$new_user.${colors[x]}"
+
+        # Создаем обязательные скрытые папки
+        mkdir -p "/home/$new_user"/{.config,.local/share}
+        chown -R "$new_user:$new_user" "/home/$new_user"
+
+        # Запрос на создание дополнительных папок
+        echo "${colors[g]}Настройка дополнительных папок в домашней директории${colors[x]}"
+        echo "${colors[y]}Пример возможных папок: backup projects documents${colors[x]}"
+        
+        if confirm "${colors[y]}Хотите создать дополнительные папки в /home/$new_user?${colors[x]}" "n"; then
+            while true; do
+                read -r -p "Введите список папок через пробел (например: backup projects): " custom_folders
+                if [ -z "$custom_folders" ]; then
+                    echo "${colors[r]}Не указаны папки для создания. Пропускаем.${colors[x]}"
+                    break
+                fi
+                
+                if [[ "$custom_folders" =~ ^[a-zA-Z0-9_[:space:]]+$ ]]; then
+                    # Проверка каждой папки на существование
+                    existing_folders=""
+                    for folder in $custom_folders; do
+                        if [ -d "/home/$new_user/$folder" ]; then
+                            existing_folders+="$folder "
+                        else
+                            mkdir -p "/home/$new_user/$folder"
+                            chown "$new_user:$new_user" "/home/$new_user/$folder"
+                        fi
+                    done
+                    
+                    if [ -n "$existing_folders" ]; then
+                        echo "${colors[y]}Папки уже существуют: $existing_folders${colors[x]}"
+                    fi
+                    
+                    created_folders=$(echo "$custom_folders" | tr ' ' '\n' | grep -v "$existing_folders" | tr '\n' ' ')
+                    if [ -n "$created_folders" ]; then
+                        echo "${colors[y]}Созданы папки: $created_folders${colors[x]}"
+                    fi
+                    break
+                else
+                    echo "${colors[r]}Ошибка: имена папок должны содержать только буквы, цифры и '_'.${colors[x]}"
+                    echo "${colors[y]}Попробуйте снова. Пример: backup projects${colors[x]}"
+                fi
+            done
         else
-            useradd -m -s /bin/bash "$new_user"
-            echo "$new_user:$new_user_password" | chpasswd
-
-            create_home_dir "$new_user"
-
-            echo "${colors[y]}Пользователь '$new_user' успешно создан.${colors[x]}"
+            echo "${colors[r]}Создание дополнительных папок отменено.${colors[x]}"
         fi
+
+        # Создаем .bashrc
+        touch "/home/$new_user/.bashrc"
+        chown "$new_user:$new_user" "/home/$new_user/.bashrc"
+        echo "${colors[y]}Пользователь '$new_user' успешно настроен.${colors[x]}"
     else
         echo "${colors[r]}Отмена создания пользователя.${colors[x]}"
     fi
 }
 
-# 9. Функция для очистки apt кэша
+# 10. Функция для очистки apt кэша
 clean_apt_cache() {
-    echo "${colors[g]}9] Очищаем apt кэш${colors[x]}"
+    echo "${colors[g]}10] Очищаем apt кэш${colors[x]}"
     if confirm "${colors[y]}Хотите очистить apt кэш?${colors[x]}" "n"; then
-        apt clean all && rm -fr /var/cache/*
-        echo
-        echo "${colors[y]}Кэш очищен${colors[x]}"
+        echo "${colors[y]}Начата очистка apt кэша...${colors[x]}"
+        
+        # Очищаем кэш apt, перенаправляя stderr в лог (но не на экран)
+        apt clean 2>/dev/null
+        
+        # Дополнительная очистка других кэш-директорий
+        echo "Очистка /var/cache/apt/archives/..."
+        rm -rf /var/cache/apt/archives/*
+        
+        echo "Очистка /var/lib/apt/lists/..."
+        rm -rf /var/lib/apt/lists/*
+        
+        echo "${colors[y]}Кэш apt и временные файлы успешно очищены${colors[x]}"
+        echo "Дата очистки: $(date)"
     else
-        echo "${colors[r]}Очистка кэша отменена${colors[x]}"
+        echo "${colors[r]}Очистка кэша отменена пользователем${colors[x]}"
     fi
 }
 
-# 10. Функция для перезагрузки системы
+# 11. Функция для перезагрузки системы
 reboot_system() {
-    echo "${colors[y]}Настройка системы завершена.${colors[x]}"
-    echo
-    echo "${colors[g]}Настоятельно рекомендуется перезагрузить сейчас систему для применения изменений.${colors[x]}"
-    echo
-    read -p "${colors[r]}Перезагрузить систему? [y/N]: ${colors[x]}" -n 1 -r
-    echo
-
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        echo "${colors[r]}ПЕРЕЗАГРУЗКА СИСТЕМЫ ${colors[x]}"
+    echo "${colors[g]}Если вы запустили этот пункт, значит все настройки завершены.${colors[x]}"
+            echo "${colors[y]}Пришло время перезагрузить систему для применения изменений.${colors[x]}"
         echo
+    if confirm "${colors[r]}Перезагрузить систему?${colors[x]}" "n"; then
+        echo "${colors[r]}ПЕРЕЗАГРУЗКА СИСТЕМЫ ${colors[x]}"
         echo "${colors[g]}Спасибо за использование этого скрипта!${colors[x]}"
-        echo "reboot"
         reboot
     else
-        echo
         echo "${colors[r]}Пропускаем перезагрузку системы. Не забудьте сделать это вручную!${colors[x]}"
-        echo
         echo "${colors[g]}Спасибо за использование этого скрипта!${colors[x]}"
-        echo
     fi
 }
 
@@ -580,11 +724,11 @@ while true; do
     echo "${colors[c]}4.${x}  ${g}Установить ПО${x}"
     echo "${colors[c]}5.${x}  ${g}Настроить Chrony${x}"
     echo "${colors[c]}6.${x}  ${g}Настроить SSH ключи${x}"
-    echo "${colors[c]}7.1${x}  ${g}Изменить порт SSH${x}"
-    echo "${colors[c]}7.2${x}  ${g}Настроить UFW${x}"
-    echo "${colors[c]}8.${x}  ${g}Добавить пользователя${x}"
-    echo "${colors[c]}9.${x}  ${g}Очистить apt кэш${x}"
-    echo "${colors[c]}10.${x} ${g}Перезагрузить систему${x}"
+    echo "${colors[c]}7.${x}  ${g}Изменить порт SSH${x}"
+    echo "${colors[c]}8.${x}  ${g}Настроить UFW${x}"
+    echo "${colors[c]}9.${x}  ${g}Добавить пользователя${x}"
+    echo "${colors[c]}10.${x}  ${g}Очистить apt кэш${x}"
+    echo "${colors[c]}11.${x} ${g}Перезагрузить систему${x}"
     echo "${colors[c]}0. Выход${x}"
 
     read -p "${colors[y]}Введите номер:${x} " choice
@@ -596,13 +740,11 @@ while true; do
         4) setup_software ;;
         5) setup_chrony ;;
         6) setup_ssh_keys ;;
-        7.1) change_ssh_port ;;
-        7.2) 
-            local sshport=$(grep '^ *Port ' "$sshconfigfile" | awk '{print $2}')
-            configure_ufw "$sshport" ;;
-        8) add_new_user ;;
-        9) clean_apt_cache ;;
-        10) reboot_system ;;
+        7) change_ssh_port ;;
+        8) configure_ufw ;;
+        9) add_new_user ;;
+        10) clean_apt_cache ;;
+        11) reboot_system ;;
         0) exit 0 ;;
         *) echo "Неверный выбор. Попробуйте еще раз." ;;
     esac
