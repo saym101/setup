@@ -740,7 +740,7 @@ while true; do
     echo "${colors[c]}7.${x}  ${g}Изменить порт SSH${x}"
     echo "${colors[c]}8.${x}  ${g}Настроить UFW${x}"
     echo "${colors[c]}9.${x}  ${g}Добавить пользователя${x}"
-    echo "${colors[c]}10.${x}  ${g}Очистить apt кэш${x}"
+    echo "${colors[c]}10.${x} ${g}Очистим apt кеш и историю команд .bash_history${x}"
     echo "${colors[c]}11.${x} ${g}Перезагрузить систему${x}"
     echo "${colors[c]}0. Выход${x}"
 
