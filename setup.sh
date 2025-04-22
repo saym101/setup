@@ -280,11 +280,11 @@ setup_chrony() {
 
         local default_servers=$(echo "$chrony_servers" | tr '\n' '|' | sed 's/|$//')
         echo "${colors[y]}Текущие серверы (для редактирования):${colors[x]}"
-        echo "${colors[c]}Введите новые NTP-серверы, разделяя их пробелом${colors[x]}"
+        echo "${colors[c]}Введите новые NTP-серверы через пробел, например: time1.google.com time2.google.com${colors[x]}"
         echo "${colors[c]}По умолчанию: ${default_servers}${colors[x]}"
         while true; do
             read -e -i "$default_servers" -p "${colors[y]}Ваш выбор: ${colors[x]}" input_servers
-            if [[ -n "$input_servers" && "$input_servers" =~ ^[a-zA-Z0-9.-[:space:]]+$ ]]; then
+            if [[ -n "$input_servers" && "$input_servers" =~ ^[a-zA-Z0-9 .-]+$ ]]; then
                 break
             else
                 echo "${colors[r]}Серверы должны содержать только буквы, цифры, точки и дефисы, и не быть пустыми.${colors[x]}"
