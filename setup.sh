@@ -1,5 +1,6 @@
 #!/bin/bash
 clear
+shopt -s extglob
 
 # === Переменные ===
 declare -A colors=(
@@ -284,11 +285,21 @@ setup_chrony() {
         echo "${colors[c]}По умолчанию: ${default_servers}${colors[x]}"
         while true; do
             read -e -i "$default_servers" -p "${colors[y]}Ваш выбор: ${colors[x]}" input_servers
-            if [[ -n "$input_servers" && "$input_servers" =~ ^[a-zA-Z0-9 .-]+$ ]]; then
-                break
-            else
-                echo "${colors[r]}Серверы должны содержать только буквы, цифры, точки и дефисы, и не быть пустыми.${colors[x]}"
-            fi
+            
+if [[ -n "$input_servers" ]]; then
+    case "$input_servers" in
+        # допустимы буквы, цифры, пробелы, точки, дефисы
+        +([a-zA-Z0-9 .-]))
+            break
+            ;;
+        *)
+            echo "${colors[r]}Серверы должны содержать только буквы, цифры, точки и дефисы.${colors[x]}"
+            ;;
+    esac
+else
+    echo "${colors[r]}Поле не должно быть пустым.${colors[x]}"
+fi
+
         done
         
         local new_servers=$(echo "$input_servers" | tr '|' '\n' | tr ' ' '\n' | grep -v '^$')
