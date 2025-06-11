@@ -17,7 +17,7 @@ currhostname=$(cat /etc/hostname)
 authorizedfile="/root/.ssh/authorized_keys"
 sshconfigfile="/etc/ssh/sshd_config"
 DATE=$(date "+%Y-%m-%d")
-standard_packages="curl gnupg mc ufw htop iftop net-tools ca-certificates lynx openssh-server openssh-client chrony"
+standard_packages="gnupg mc ufw htop iftop net-tools ca-certificates lynx openssh-server openssh-client chrony"
 chrony_servers="
 0.ru.pool.ntp.org
 1.ru.pool.ntp.org
