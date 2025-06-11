@@ -18,11 +18,7 @@ authorizedfile="/root/.ssh/authorized_keys"
 sshconfigfile="/etc/ssh/sshd_config"
 DATE=$(date "+%Y-%m-%d")
 standard_packages="gnupg mc ufw htop iftop net-tools ca-certificates lynx openssh-server openssh-client chrony"
-chrony_servers="
-0.ru.pool.ntp.org
-1.ru.pool.ntp.org
-2.ru.pool.ntp.org
-3.ru.pool.ntp.org"
+chrony_servers="0.ru.pool.ntp.org 1.ru.pool.ntp.org 2.ru.pool.ntp.org 3.ru.pool.ntp.org"
 # Читаем текущий порт из sshd_config при запуске
 ssh_port=$(grep -E '^[[:space:]]*Port[[:space:]]+[0-9]+' "$sshconfigfile" | awk '{print $2}' | head -n 1)
 if [ -z "$ssh_port" ]; then
