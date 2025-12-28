@@ -4,6 +4,8 @@
 ### Ссылка для копирования скрипта 
 ```
 wget https://raw.githubusercontent.com/saym101/setup/main/setup.sh
+chmod +x setup.sh
+./setup.sh
 
 ```
 Что умеет скрипт.
