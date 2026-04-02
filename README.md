@@ -1,5 +1,6 @@
 # setup.sh
 # Настройка Debian\Ubuntu при первой загрузке
+# Setting up Debian\Ubuntu on first boot
 
 ### Ссылка для копирования скрипта 
 ```
