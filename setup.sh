@@ -199,7 +199,7 @@ setup_chrony() {
     if ! command -v chronyc >/dev/null 2>&1 || ! [ -f /etc/chrony/chrony.conf ]; then
         echo "${colors[r]}Chrony не установлен или конфигурационный файл отсутствует.${colors[x]}"
         if confirm "${colors[y]}Установить Chrony?${colors[x]}" "y"; then
-            apt update && apt install -y chrony || {
+            apt-get update && apt install -y chrony || {
                 echo "${colors[r]}Ошибка при установке Chrony.${colors[x]}"
                 return
             }
