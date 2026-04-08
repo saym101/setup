@@ -24,6 +24,7 @@ currhostname=$(cat /etc/hostname 2>/dev/null || hostname)
 authorizedfile="/root/.ssh/authorized_keys"
 sshconfigfile="/etc/ssh/sshd_config"
 DATE=$(date "+%Y-%m-%d")
+LAMP_URL="https://raw.githubusercontent.com/saym101/-LAMP-Apache-Angie-PHP-/main/lamp.sh"
 standard_packages="curl wget git sudo htop iotop ncdu mc zip unzip 7zip dnsutils net-tools iproute2 ca-certificates gnupg chrony openssh-server openssh-client lynx rsync"
 chrony_servers="0.ru.pool.ntp.org 1.ru.pool.ntp.org 2.ru.pool.ntp.org 3.ru.pool.ntp.org"
 
@@ -163,7 +164,9 @@ setup_software() {
         done
         echo "${colors[y]}Обновление списка пакетов...${colors[x]}"
         apt-get update
-        if ! apt-get install -y "$user_input"; then
+        # Читаем строку в массив — каждый пакет отдельным элементом
+        read -r -a pkg_array <<< "$user_input"
+        if ! apt-get install -y "${pkg_array[@]}"; then
             echo "${colors[r]}Ошибка при установке пакетов.${colors[x]}"
         fi
         [ -f /usr/share/mc/syntax/sh.syntax ] && cp /usr/share/mc/syntax/sh.syntax /usr/share/mc/syntax/unknown.syntax
@@ -260,31 +263,38 @@ setup_ssh_keys() {
         directory="$HOME/.ssh"
         mkdir -p "$directory"
         key_path="$directory/$currhostname-$DATE"
-        ssh-keygen -t rsa -b 4096 -C "$email" -f "$key_path" -N ""
+
+        # Генерация ключа — только один раз, результат проверяем по коду возврата
         if ssh-keygen -t rsa -b 4096 -C "$email" -f "$key_path" -N "" >/dev/null 2>&1; then
-            if apt-get update >/dev/null 2>&1 && apt-get install -y putty-tools >/dev/null 2>&1; then
+            if apt-get install -y putty-tools >/dev/null 2>&1; then
                 puttygen "$key_path" -o "$key_path.ppk" 2>/dev/null
                 if [ -f "$key_path.ppk" ]; then
                     echo "${colors[y]}Содержимое файла $key_path.ppk (Скопируйте его!):${colors[x]}"
                     echo "---------------------------------------------"
                     cat "$key_path.ppk"
                     echo "---------------------------------------------"
-                    echo -e "${colors[r]}Ключ $key_path.ppk для доступа по SSH лучше удалить с сервера.${colors[x]}"
-                    echo -e "${colors[r]}Но прежде чем удалять, скопируйте его к себе в надёжное место.${colors[x]}"
+                    echo -e "${colors[r]}Ключ $key_path.ppk лучше удалить с сервера после копирования.${colors[x]}"
                     echo ""
                     if confirm "${colors[r]}Удаляем?${colors[x]}" "n"; then
                         rm "$key_path.ppk"
                     fi
                 fi
             fi
-        fi
-        if ! grep -qF "$(cat "$key_path.pub")" "$authorizedfile"; then
-            cat "$key_path.pub" >> "$authorizedfile"
-            echo "${colors[y]}Ключ добавлен в authorized_keys.${colors[x]}"
         else
-            echo "${colors[c]}Этот ключ уже есть в списке. Пропускаем.${colors[x]}"
+            echo "${colors[r]}Ошибка генерации SSH-ключа.${colors[x]}"
+            return
         fi
-        chmod 600 "$authorizedfile"
+
+        if [ -f "$key_path.pub" ]; then
+            if ! grep -qF "$(cat "$key_path.pub")" "$authorizedfile" 2>/dev/null; then
+                cat "$key_path.pub" >> "$authorizedfile"
+                echo "${colors[y]}Ключ добавлен в authorized_keys.${colors[x]}"
+            else
+                echo "${colors[c]}Этот ключ уже есть в списке. Пропускаем.${colors[x]}"
+            fi
+            chmod 600 "$authorizedfile"
+        fi
+
         if [ -f /etc/ssh/sshd_config ]; then
             cp /etc/ssh/sshd_config "/etc/ssh/sshd_config.backup_$(date +%F_%H-%M-%S)"
         fi
@@ -322,7 +332,7 @@ change_ssh_port() {
 # 8. UFW
 configure_ufw() {
     if ! command -v ufw >/dev/null 2>&1; then
-        if confirm "UFW не установлен. Установить? (y/n)" "n"; then
+        if confirm "UFW не установлен. Установить?" "n"; then
             echo "${colors[y]}Устанавливаем UFW...${colors[x]}"
             if apt-get update && apt-get install -y ufw; then
                 if ! command -v ufw >/dev/null 2>&1; then
@@ -362,9 +372,7 @@ configure_ufw() {
                 ufw --force enable
                 echo "${colors[g]}UFW включен. Доступ по порту $ssh_port разрешен.${colors[x]}"
                 ;;
-            2)
-                ufw status numbered
-                ;;
+            2) ufw status numbered ;;
             3)
                 read -r -p "Введите порт или название сервиса (напр. 80 или http): " p_allow
                 ufw allow "$p_allow"
@@ -401,14 +409,13 @@ add_new_user() {
     local login_dir="${PWD}/login"
     mkdir -p "$login_dir"
     chmod 700 "$login_dir"
-    
-    # Show existing files using find instead of ls
+
     local existing_files=()
     while IFS= read -r -d '' file; do
         existing_files+=("$file")
     done < <(find "$login_dir" -maxdepth 1 -name '*_temp_*.txt' -print0 2>/dev/null | sort -z)
     local total_files=${#existing_files[@]}
-    
+
     if [ "$total_files" -gt 0 ]; then
         echo "${colors[c]}Найдены сохранённые данные для входа ($total_files):${colors[x]}"
         echo ""
@@ -443,24 +450,20 @@ add_new_user() {
         done
         echo ""
     fi
-    
+
     if confirm "Хотите добавить нового пользователя?" "n"; then
         mapfile -t all_users < <(awk -F: '$3 >= 1000 && $3 < 65534 {print $1}' /etc/passwd | sort)
         local total_users=${#all_users[@]}
-        
+
         if [ "$total_users" -gt 0 ]; then
             echo "${colors[c]}Существующие пользователи в системе ($total_users):${colors[x]}"
-            local per_page=36
-            local cols=3
-            local page=0
+            local per_page=36 cols=3 page=0
             local total_pages=$(( (total_users + per_page - 1) / per_page ))
             while true; do
                 clear
                 echo "${colors[g]}=== Существующие пользователи (страница $((page + 1)) из $total_pages) ===${colors[x]}"
                 echo "---------------------------------"
                 local start=$((page * per_page))
-                local end=$((start + per_page))
-                [ "$end" -gt "$total_users" ] && end=$total_users
                 local page_users=("${all_users[@]:$start:$per_page}")
                 local page_count=${#page_users[@]}
                 local col_size=$(( (page_count + cols - 1) / cols ))
@@ -504,7 +507,7 @@ add_new_user() {
         else
             echo "${colors[r]}В системе нет обычных пользователей.${colors[x]}"
         fi
-        
+
         clear
         echo "${colors[g]}=== Создание нового пользователя ===${colors[x]}"
         while true; do
@@ -531,7 +534,7 @@ add_new_user() {
         mkdir -p "$user_ssh_dir"
         local user_key_path="$user_ssh_dir/id_rsa"
         ssh-keygen -t rsa -b 4096 -C "$new_user@$currhostname" -f "$user_key_path" -N "" >/dev/null 2>&1
-        
+
         local user_ppk_path=""
         if command -v puttygen >/dev/null 2>&1; then
             user_ppk_path="$user_ssh_dir/$new_user.ppk"
@@ -561,7 +564,6 @@ add_new_user() {
         echo -e "${colors[r]}СКАЧАЙТЕ ЭТОТ ФАЙЛ И УДАЛИТЕ ЕГО С СЕРВЕРА!${colors[x]}"
         unset new_user_password
 
-        # Check for old files using glob instead of ls|grep
         local old_files=()
         for f in "$login_dir"/"${new_user}"_temp_*.txt; do
             [ -e "$f" ] || continue
@@ -587,7 +589,7 @@ add_new_user() {
 
         mkdir -p "/home/$new_user"/{.config,.local/share}
         chown -R "$new_user:$new_user" "/home/$new_user"
-        
+
         if confirm "Создать дополнительные папки (backup projects)?${colors[x]}" "n"; then
             read -r -p "Папки через пробел: " custom_folders
             for folder in $custom_folders; do
@@ -607,7 +609,7 @@ setup_fail2ban() {
     echo "${colors[g]}10] Установка и настройка fail2ban${colors[x]}"
     local local_jail="/etc/fail2ban/jail.local"
     local local_jail_d="/etc/fail2ban/jail.d"
-    
+
     if ! command -v fail2ban-client >/dev/null 2>&1; then
         echo "${colors[r]}Fail2ban не найден в системе.${colors[x]}"
         if confirm "${colors[y]}Установить fail2ban?${colors[x]}" "n"; then
@@ -618,9 +620,7 @@ setup_fail2ban() {
                     return 1
                 fi
                 echo "${colors[g]}Fail2ban успешно установлен.${colors[x]}"
-                local fail2ban_version
-                fail2ban_version="$(fail2ban-client version)"
-                echo "${colors[g]}$fail2ban_version${colors[x]}"
+                echo "${colors[g]}$(fail2ban-client version)${colors[x]}"
             else
                 echo "${colors[r]}Ошибка при установке fail2ban.${colors[x]}"
                 return 1
@@ -633,7 +633,6 @@ setup_fail2ban() {
         echo "${colors[g]}Fail2ban обнаружен в системе.${colors[x]}"
     fi
 
-    # Inner functions
     get_all_protected_ports() {
         local ports_list=""
         [ -f "$local_jail" ] && ports_list+="$(grep -E "^port\s*=" "$local_jail" 2>/dev/null | cut -d'=' -f2 | tr -d ' ')"$'\n'
@@ -684,7 +683,7 @@ setup_fail2ban() {
     }
 
     mkdir -p "$local_jail_d"
-    
+
     if [ ! -f "$local_jail" ]; then
         {
             echo "[DEFAULT]"
@@ -703,7 +702,6 @@ setup_fail2ban() {
         echo "${colors[y]}=== Управление Fail2Ban ===${colors[x]}"
         echo "${colors[g]}Текущая версия: ${colors[r]}$fail2ban_version${colors[x]}"
         echo ""
-        
         echo "${colors[c]}Текущие активные правила:${colors[x]}"
         local has_rules=false
         if [ -f "$local_jail" ]; then
@@ -717,8 +715,7 @@ setup_fail2ban() {
         if [ -d "$local_jail_d" ]; then
             for conf in "$local_jail_d"/*.conf; do
                 [ -f "$conf" ] || continue
-                local conf_name
-                conf_name=$(basename "$conf")
+                local conf_name; conf_name=$(basename "$conf")
                 local conf_ports
                 conf_ports=$(grep -E "^port\s*=" "$conf" 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
                 if [ -n "$conf_ports" ]; then
@@ -727,18 +724,15 @@ setup_fail2ban() {
                 fi
             done
         fi
-        if [ "$has_rules" = false ]; then
-            echo "  (нет правил)"
-        fi
+        [ "$has_rules" = false ] && echo "  (нет правил)"
         echo ""
-        
         echo "${colors[y]}Выберите действие:${colors[x]}"
         echo "1) Добавить защиту нового порта/сервиса"
         echo "2) Удалить правило"
         echo "3) Выйти в главное меню"
         echo ""
         read -r -p "Ваш выбор: " action_choice
-        
+
         case $action_choice in
             1)
                 echo ""
@@ -751,7 +745,18 @@ setup_fail2ban() {
                 local jail_name="" jail_port="" jail_log=""
                 case $port_choice in
                     1) jail_name="sshd"; jail_port="$ssh_port"; jail_log="%(sshd_log)s" ;;
-                    2) jail_name="nginx-http-auth"; jail_port="80,443"; jail_log="/var/log/angie/error.log" ;;
+                    2)
+                        jail_name="webserver-auth"
+                        jail_port="80,443"
+                        # Определяем активный веб-сервер для правильного пути к логу
+                        if command -v angie &>/dev/null; then
+                            jail_log="/var/log/angie/error.log"
+                        elif command -v apache2 &>/dev/null; then
+                            jail_log="/var/log/apache2/error.log"
+                        else
+                            jail_log="/var/log/syslog"
+                        fi
+                        ;;
                     3) jail_name="postfix"; jail_port="25,465,587"; jail_log="/var/log/mail.log" ;;
                     4)
                         read -r -p "Введите имя правила (латиница, напр. myapp): " jail_name
@@ -818,7 +823,7 @@ setup_fail2ban() {
                 echo ""
                 cat "$rule_file"
                 echo ""
-                
+
                 if confirm "${colors[y]}Применить и перезапустить fail2ban?${colors[x]}" "y"; then
                     fail2ban-client reload
                     sleep 3
@@ -871,9 +876,7 @@ setup_fail2ban() {
                             if confirm "${colors[y]}Перезапустить fail2ban?${colors[x]}" "y"; then
                                 systemctl restart fail2ban
                                 sleep 3
-                                if systemctl is-active --quiet fail2ban; then
-                                    echo "${colors[y]}Fail2ban перезапущен.${colors[x]}"
-                                fi
+                                systemctl is-active --quiet fail2ban && echo "${colors[y]}Fail2ban перезапущен.${colors[x]}"
                             fi
                         else
                             echo "${colors[c]}Удаление отменено.${colors[x]}"
@@ -896,9 +899,46 @@ setup_fail2ban() {
     done
 }
 
-# 11. Clean cache
+# 11. LAMP Setup
+setup_lamp() {
+echo "${colors[g]}11] Настройка LAMP/LEMP${colors[x]}"
+local lamp_dir="${PWD}"
+local lamp_script="${lamp_dir}/lamp.sh"
+# Скачиваем если нет или предлагаем обновить
+if [ -f "$lamp_script" ]; then
+echo "${colors[y]}Найден существующий lamp.sh: $lamp_script${colors[x]}"
+if confirm "${colors[y]}Скачать актуальную версию с GitHub?${colors[x]}" "n"; then
+if wget -q --timeout=30 -O "${lamp_script}.new" "$LAMP_URL" 2>/dev/null && [ -s "${lamp_script}.new" ]; then
+cp "$lamp_script" "${lamp_script}.bak_${DATE}"
+mv "${lamp_script}.new" "$lamp_script"
+echo "${colors[g]}Обновлён. Старая версия: ${lamp_script}.bak_${DATE}${colors[x]}"
+else
+rm -f "${lamp_script}.new"
+echo "${colors[r]}Ошибка загрузки. Используем существующий скрипт.${colors[x]}"
+fi
+fi
+else
+echo "${colors[c]}Скачиваю lamp.sh с GitHub...${colors[x]}"
+if wget -q --timeout=30 -O "$lamp_script" "$LAMP_URL" 2>/dev/null && [ -s "$lamp_script" ]; then
+echo "${colors[g]}Загружено: $lamp_script${colors[x]}"
+else
+rm -f "$lamp_script"
+echo "${colors[r]}Ошибка загрузки lamp.sh с GitHub.${colors[x]}"
+echo "${colors[y]}Проверьте доступ к: $LAMP_URL${colors[x]}"
+return 1
+fi
+fi
+chmod +x "$lamp_script"
+echo ""
+echo "${colors[g]}Запуск lamp.sh...${colors[x]}"
+echo "${colors[c]}Скрипт останется в: $lamp_script${colors[x]}"
+echo ""
+bash "$lamp_script"
+}
+
+# 12. Clean cache
 clean_apt_cache() {
-    echo "${colors[g]}11] Очистка системного кэша${colors[x]}"
+    echo "${colors[g]}12] Очистка системного кэша${colors[x]}"
     if confirm "${colors[y]}Очистить кэш и историю?${colors[x]}" "n"; then
         apt-get clean 2>/dev/null
         rm -rf /var/cache/apt/archives/* /var/lib/apt/lists/*
@@ -910,9 +950,9 @@ clean_apt_cache() {
     fi
 }
 
-# 12. Reboot
+# 13. Reboot
 reboot_system() {
-    echo "${colors[g]}12] Завершение настройки${colors[x]}"
+    echo "${colors[g]}13] Завершение настройки${colors[x]}"
     if confirm "${colors[r]}Перезагрузить систему?${colors[x]}" "n"; then
         reboot
     fi
@@ -925,9 +965,11 @@ while true; do
     echo "${colors[r]}Задайте предварительно пароль для root командой 'sudo passwd root'.${colors[x]}"
     echo
     echo "${colors[y]}Выберите номер нужного пункта:${colors[x]}"
-    echo "${colors[c]}1.${colors[x]}  ${colors[g]}Изменить hostname${colors[x]}"
-    echo "${colors[c]}2.${colors[x]}  ${colors[g]}Изменить локаль${colors[x]}"
-    echo "${colors[c]}3.${colors[x]}  ${colors[g]}Изменить часовой пояс${colors[x]}"
+    echo
+    echo "${colors[c]}1.${colors[x]}  ${colors[g]}Установить минимальный набор ПО${colors[x]}"   
+    echo "${colors[c]}2.${colors[x]}  ${colors[g]}Изменить hostname${colors[x]}"
+    echo "${colors[c]}3.${colors[x]}  ${colors[g]}Изменить локаль${colors[x]}"
+    echo "${colors[c]}4.${colors[x]}  ${colors[g]}Изменить часовой пояс${colors[x]}"
     echo "${colors[c]}4.${colors[x]}  ${colors[g]}Установить ПО${colors[x]}"
     echo "${colors[c]}5.${colors[x]}  ${colors[g]}Настроить Chrony${colors[x]}"
     echo "${colors[c]}6.${colors[x]}  ${colors[g]}Настроить SSH ключи${colors[x]}"
@@ -935,25 +977,28 @@ while true; do
     echo "${colors[c]}8.${colors[x]}  ${colors[g]}Настроить UFW${colors[x]}"
     echo "${colors[c]}9.${colors[x]}  ${colors[g]}Добавить пользователя${colors[x]}"
     echo "${colors[c]}10.${colors[x]} ${colors[g]}Настроить fail2ban (Защита от взлома)${colors[x]}"
-    echo "${colors[c]}11.${colors[x]} ${colors[g]}Очистить apt кеш и историю${colors[x]}"
-    echo "${colors[c]}12.${colors[x]} ${colors[g]}Перезагрузить систему${colors[x]}"
+    echo "${colors[c]}11.${colors[x]} ${colors[g]}Настройка LAMP/LEMP${colors[x]}"
+    echo "${colors[c]}12.${colors[x]} ${colors[g]}Очистить apt кеш и историю${colors[x]}"
+    echo "${colors[c]}13.${colors[x]} ${colors[g]}Перезагрузить систему${colors[x]}"
     echo "${colors[c]}0.${colors[x]}  Выход"
+    echo
     read -r -p "${colors[y]}Введите номер:${colors[x]} " choice
     case $choice in
-        1) setup_hostname ;;
-        2) setup_locale ;;
-        3) setup_timezone ;;
-        4) setup_software ;;
-        5) setup_chrony ;;
-        6) setup_ssh_keys ;;
-        7) change_ssh_port ;;
-        8) configure_ufw ;;
-        9) add_new_user ;;
+        1)  setup_software ;;    
+        2)  setup_hostname ;;
+        3)  setup_locale ;;
+        4)  setup_timezone ;;
+        5)  setup_chrony ;;
+        6)  setup_ssh_keys ;;
+        7)  change_ssh_port ;;
+        8)  configure_ufw ;;
+        9)  add_new_user ;;
         10) setup_fail2ban ;;
-        11) clean_apt_cache ;;
-        12) reboot_system ;;
-        0) exit 0 ;;
-        *) echo "${colors[r]}Неверный выбор.${colors[x]}" ;;
+        11) setup_lamp ;;
+        12) clean_apt_cache ;;
+        13) reboot_system ;;
+        0)  exit 0 ;;
+        *)  echo "${colors[r]}Неверный выбор.${colors[x]}" ;;
     esac
     read -r -p "${colors[y]}Нажмите Enter для продолжения...${colors[x]}"
 done
