@@ -19,6 +19,11 @@ This script provides a menu-driven interface to perform the following tasks:
 * **User Management:** Add new sudo users with automatic SSH key deployment and credentials logging.
 * **Web Stack:** Quick integration with external LAMP/LEMP installation scripts.
 
+### 🌐 Integrated Web Stack
+This script seamlessly integrates with my custom LAMP/LEMP installer:
+* **Project Link:** [saym101/-LAMP-Apache-Angie-PHP-](https://github.com/saym101/-LAMP-Apache-Angie-PHP-)
+* **Stack:** Supports Apache, Angie (Nginx fork), and PHP.
+
 ---
 
 ## 🚀 Quick Start
