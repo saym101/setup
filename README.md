@@ -1,47 +1,63 @@
-# setup.sh
-# Настройка Debian\Ubuntu при первой загрузке
-# Setting up Debian\Ubuntu on first boot
+# 🚀 Debian/Ubuntu Initial Server Setup Script
 
-### Ссылка для копирования скрипта 
-```
-wget https://raw.githubusercontent.com/saym101/setup/main/setup.sh
-chmod +x setup.sh
-./setup.sh
+A comprehensive, interactive Bash script designed to automate the initial configuration of a fresh Debian or Ubuntu server. It focuses on security, localization, and essential software installation.
 
-```
-Что умеет скрипт.
+## ✨ Features
 
-1. Изменяем hostname.
-2. Изменяем locale По умолчанию скрипт применяет ru_RU.UTF-8
-3. Изменяем часовой пояс. По умолчанию скрипт примменяет - Europe/Moscow
-4. 
-5. Установка необходимого ПО.
-   Можно остаить как есть, можно изменить на свой, можно что то добавить или удалить. У каждого свой вкус.
-   По умолчанию используется такой набор:
--  curl gnupg  mc ufw htop iftop ntpdate ntp network-manager net-tools ca-certificates wget lynx language-pack-ru openssh-server openssh-client xclip
-6. Настройка NTP сервиса.
-   Изменяем сервера которые используются по умолчанию на эти:
--	pool 0.ru.pool.ntp.org
--	pool 1.ru.pool.ntp.org
--	pool 2.ru.pool.ntp.org
--	pool 3.ru.pool.ntp.org
-7. Настройка доступа root через SSH без пароля по ключу.
-    Генерирует пару ключей. Прописывает публичный в .ssh/authorized_keys Путь можно сменить. Запрещает доступ а систему через пароль и открывает доступ по ключу.
-    Поэтому надо осторожнее, что бы не потерять доступ к системе используя Putty\Kitty
-8. Изменяем порт для SSH. Настройка UFW.
-    Позволяет сменить текущий или используемый по умолчанию 22 порт SSH, на случайный из диапазона 1025-49150. Или применить свой любимый порт.
-    Откройте новую сессию SSH с установленным новым портом и если получается подключится, выйдите из старой сессии и. перейдите для работы в новой.
-    UFW настройки. Оставит по умолчанию 22 порт, если не стали менять порт. Или поменяет на новый порт и закроет доступ на 22 порт. 
-9. Добавляем нового пользователя и создаём домашний каталог с папками. Домашней папке будут созданы следующие коталоги.
-   Можно закомментировать ненужное или добавить свой каталог.
--  mkdir -p "$home_dir/.config"
--  mkdir -p "$home_dir/.local"
--  mkdir -p "$home_dir/.local/share"
--  mkdir -p "$home_dir/Documents"
--  mkdir -p "$home_dir/Download"
--  mkdir -p "$home_dir/Backup"  
--  mkdir -p "$home_dir/Music"
--  mkdir -p "$home_dir/Pictures"
--  mkdir -p "$home_dir/Video" 
-10. Очищаем apt кэш.
-11. Перезагрузка системы.
+This script provides a menu-driven interface to perform the following tasks:
+
+* **System Localization:** Set custom Hostname, Locale, and Timezone.
+* **Software Management:** Install a curated list of essential packages (git, curl, htop, etc.) and clean APT cache.
+* **Time Sync:** Full configuration of `chrony` (NTP) with custom server support.
+* **Hardened SSH:** * Generate RSA key pairs.
+    * Convert keys to PPK format (for PuTTY).
+    * Disable password authentication and root password login.
+    * Change the default SSH port to a custom or random one.
+* **Security:**
+    * **UFW (Uncomplicated Firewall):** Interactive rule management.
+    * **Fail2Ban:** Protect SSH, Web, and Mail services from brute-force attacks with automatic conflict checking.
+* **User Management:** Add new sudo users with automatic SSH key deployment and credentials logging.
+* **Web Stack:** Quick integration with external LAMP/LEMP installation scripts.
+
+---
+
+## 🚀 Quick Start
+
+> **Warning:** This script must be run as **root** or with **sudo** privileges.
+
+1.  **Download the script:**
+    ```bash
+    wget https://raw.githubusercontent.com/saym101/setup/main/setup.sh
+    ```
+
+2.  **Make it executable:**
+    ```bash
+    chmod +x setup.sh
+    ```
+
+3.  **Run it:**
+    ```bash
+    sudo ./setup.sh
+    ```
+
+---
+
+## 🛠 Usage Details
+
+### Logging
+All actions and outputs are automatically logged to a file named `setup_YYYY-MM-DD.log` in the current directory for later auditing.
+
+### User Creation
+When adding a new user, the script generates a temporary file in the `./login` directory containing the username, password, and paths to SSH keys. **Remember to download these and delete the file from the server!**
+
+### Security First
+The script encourages best practices by:
+* Enforcing `prohibit-password` for Root via SSH.
+* Suggesting non-standard SSH ports.
+* Setting up Fail2Ban jails with long ban times (10h).
+
+---
+
+## 📋 Requirements
+* **OS:** Debian 10/11/12 or Ubuntu 20.04/22.04+
+* **Privileges:** Root access
