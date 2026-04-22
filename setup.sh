@@ -25,7 +25,7 @@ authorizedfile="/root/.ssh/authorized_keys"
 sshconfigfile="/etc/ssh/sshd_config"
 DATE=$(date "+%Y-%m-%d")
 LAMP_URL="https://raw.githubusercontent.com/saym101/-LAMP-Apache-Angie-PHP-/main/lamp.sh"
-standard_packages="curl wget git sudo htop iotop ncdu mc zip unzip 7zip dnsutils net-tools iproute2 ca-certificates gnupg chrony openssh-server openssh-client lynx rsync"
+standard_packages="curl wget git sudo htop iotop ncdu mc zip unzip 7zip dnsutils net-tools nmap iproute2 ca-certificates gnupg chrony openssh-server openssh-client lynx rsync"
 chrony_servers="0.ru.pool.ntp.org 1.ru.pool.ntp.org 2.ru.pool.ntp.org 3.ru.pool.ntp.org"
 
 # Читаем текущий порт из sshd_config
