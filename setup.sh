@@ -371,7 +371,12 @@ configure_ufw() {
             1)
                 ufw allow "$ssh_port"/tcp
                 ufw --force enable
-                echo "${colors[g]}UFW включен. Доступ по порту $ssh_port разрешен.${colors[x]}"
+                systemctl enable --now ufw 2>/dev/null
+                if ufw status | grep -q "Status: active"; then
+                    echo "${colors[g]}UFW включен. Доступ по порту $ssh_port разрешен.${colors[x]}"
+                else
+                    echo "${colors[r]}Не удалось включить UFW. Проверьте: systemctl status ufw${colors[x]}"
+                fi
                 ;;
             2) ufw status numbered ;;
             3)
@@ -385,7 +390,7 @@ configure_ufw() {
             5)
                 ufw status numbered
                 read -r -p "Введите НОМЕР правила для удаления: " p_del
-                ufw delete "$p_del"
+                ufw --force delete "$p_del"
                 ;;
             6)
                 if confirm "${colors[r]}Вы уверены, что хотите сбросить ВСЕ правила?${colors[x]}" "n"; then
@@ -971,6 +976,7 @@ while true; do
     echo "${colors[c]}2.${colors[x]}  ${colors[g]}Изменить hostname${colors[x]}"
     echo "${colors[c]}3.${colors[x]}  ${colors[g]}Изменить локаль${colors[x]}"
     echo "${colors[c]}4.${colors[x]}  ${colors[g]}Изменить часовой пояс${colors[x]}"
+    echo "${colors[c]}4.${colors[x]}  ${colors[g]}Установить ПО${colors[x]}"
     echo "${colors[c]}5.${colors[x]}  ${colors[g]}Настроить Chrony${colors[x]}"
     echo "${colors[c]}6.${colors[x]}  ${colors[g]}Настроить SSH ключи${colors[x]}"
     echo "${colors[c]}7.${colors[x]}  ${colors[g]}Изменить порт SSH${colors[x]}"
