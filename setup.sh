@@ -1,4 +1,5 @@
 #!/bin/bash
+# wget https://raw.githubusercontent.com/saym101/setup/main/setup.sh
 clear
 shopt -s extglob
 
