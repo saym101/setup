@@ -971,7 +971,6 @@ while true; do
     echo "${colors[c]}2.${colors[x]}  ${colors[g]}Изменить hostname${colors[x]}"
     echo "${colors[c]}3.${colors[x]}  ${colors[g]}Изменить локаль${colors[x]}"
     echo "${colors[c]}4.${colors[x]}  ${colors[g]}Изменить часовой пояс${colors[x]}"
-    echo "${colors[c]}4.${colors[x]}  ${colors[g]}Установить ПО${colors[x]}"
     echo "${colors[c]}5.${colors[x]}  ${colors[g]}Настроить Chrony${colors[x]}"
     echo "${colors[c]}6.${colors[x]}  ${colors[g]}Настроить SSH ключи${colors[x]}"
     echo "${colors[c]}7.${colors[x]}  ${colors[g]}Изменить порт SSH${colors[x]}"
