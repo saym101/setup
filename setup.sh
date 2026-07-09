@@ -325,7 +325,11 @@ change_ssh_port() {
         echo "${colors[r]}Ошибка ввода. Порт не изменён.${colors[x]}"
         return
     fi
-    sed -i "/^#*Port /c\\Port $ssh_port" "$sshconfigfile" || echo "Port $ssh_port" >> "$sshconfigfile"
+    if grep -qE '^[[:space:]]*#*[[:space:]]*Port[[:space:]]+[0-9]+' "$sshconfigfile"; then
+        sed -i -E "s/^[[:space:]]*#*[[:space:]]*Port[[:space:]]+[0-9]+/Port $ssh_port/" "$sshconfigfile"
+    else
+        echo "Port $ssh_port" >> "$sshconfigfile"
+    fi
     systemctl restart ssh
     echo "${colors[y]}Порт SSH изменён на $ssh_port.${colors[x]}"
 }
@@ -369,6 +373,10 @@ configure_ufw() {
         read -r -p "Выберите действие: " ufw_choice
         case $ufw_choice in
             1)
+                local active_ssh_port
+                active_ssh_port=$(grep -E '^[[:space:]]*Port[[:space:]]+[0-9]+' "$sshconfigfile" | awk '{print $2}' | tail -n1)
+                [ -z "$active_ssh_port" ] && active_ssh_port=22
+                ssh_port="$active_ssh_port"
                 ufw allow "$ssh_port"/tcp
                 ufw --force enable
                 systemctl enable --now ufw 2>/dev/null
@@ -533,7 +541,7 @@ add_new_user() {
         done
 
         useradd -m -s /bin/bash "$new_user"
-        echo "$new_user:$new_user_password" | chpasswd
+        chpasswd <<< "$new_user:$new_user_password"
         chage -d 0 "$new_user"
 
         local user_ssh_dir="/home/$new_user/.ssh"
@@ -976,7 +984,6 @@ while true; do
     echo "${colors[c]}2.${colors[x]}  ${colors[g]}Изменить hostname${colors[x]}"
     echo "${colors[c]}3.${colors[x]}  ${colors[g]}Изменить локаль${colors[x]}"
     echo "${colors[c]}4.${colors[x]}  ${colors[g]}Изменить часовой пояс${colors[x]}"
-    echo "${colors[c]}4.${colors[x]}  ${colors[g]}Установить ПО${colors[x]}"
     echo "${colors[c]}5.${colors[x]}  ${colors[g]}Настроить Chrony${colors[x]}"
     echo "${colors[c]}6.${colors[x]}  ${colors[g]}Настроить SSH ключи${colors[x]}"
     echo "${colors[c]}7.${colors[x]}  ${colors[g]}Изменить порт SSH${colors[x]}"
