@@ -50,7 +50,11 @@ This script seamlessly integrates with my custom LAMP/LEMP installer:
 ## 🛠 Usage Details
 
 ### Logging
-All actions and outputs are automatically logged to a file named `setup_YYYY-MM-DD.log` in the current directory for later auditing.
+Off by default. Private key material (e.g. the PPK dump in step 6) is printed to the screen, so a full transcript could leak a private key onto disk. Enable it only when debugging the script itself:
+```bash
+sudo bash setup.sh --log
+```
+This writes `setup_YYYY-MM-DD.log` (mode 600) in the current directory. Delete it once you're done.
 
 ### User Creation
 When adding a new user, the script generates a temporary file in the `./login` directory containing the username, password, and paths to SSH keys. **Remember to download these and delete the file from the server!**

@@ -35,9 +35,21 @@ if [ -z "$ssh_port" ]; then
     ssh_port=22
 fi
 
-# Логирование
-LOG_FILE="${PWD}/$(basename "$0" .sh)_${DATE}.log"
-exec > >(tee -a "$LOG_FILE") 2>&1
+# Логирование — по умолчанию выключено (см. README: приватные ключи/пароли
+# могут попадать на экран, а с логом — и в файл). Включить при отладке:
+#   sudo bash setup.sh --log
+ENABLE_LOG=0
+for arg in "$@"; do
+    case "$arg" in
+        --log|-l) ENABLE_LOG=1 ;;
+    esac
+done
+if [ "$ENABLE_LOG" -eq 1 ]; then
+    LOG_FILE="${PWD}/$(basename "$0" .sh)_${DATE}.log"
+    touch "$LOG_FILE" && chmod 600 "$LOG_FILE"
+    exec > >(tee -a "$LOG_FILE") 2>&1
+    echo "${colors[y]}Логирование включено: $LOG_FILE (в лог может попасть приватный ключ при генерации — удалите файл после отладки).${colors[x]}"
+fi
 
 # === Функции ===
 confirm() {
