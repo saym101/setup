@@ -287,6 +287,7 @@ setup_ssh_keys() {
                     cat "$key_path.ppk"
                     echo "---------------------------------------------"
                     echo -e "${colors[r]}Ключ $key_path.ppk лучше удалить с сервера после копирования.${colors[x]}"
+                    echo -e "${colors[r]}WARNING: this is a private key. Copy it now and delete it (and $key_path) from the server.${colors[x]}"
                     echo ""
                     if confirm "${colors[r]}Удаляем?${colors[x]}" "n"; then
                         rm "$key_path.ppk"
@@ -588,6 +589,7 @@ add_new_user() {
 
         echo -e "${colors[y]}Данные для '$new_user' сохранены в: ${pass_file}${colors[x]}"
         echo -e "${colors[r]}СКАЧАЙТЕ ЭТОТ ФАЙЛ И УДАЛИТЕ ЕГО С СЕРВЕРА!${colors[x]}"
+        echo -e "${colors[r]}WARNING: this file contains a plaintext password and points to an unencrypted private key ($user_key_path). Download it and delete it (and the key) from the server!${colors[x]}"
         unset new_user_password
 
         local old_files=()
