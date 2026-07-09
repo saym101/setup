@@ -1,5 +1,7 @@
 # 🚀 Debian/Ubuntu Initial Server Setup Script
 
+*[Читать на русском](README_RU.md)*
+
 A comprehensive, interactive Bash script designed to automate the initial configuration of a fresh Debian or Ubuntu server. It focuses on security, localization, and essential software installation.
 
 ## ✨ Features
@@ -58,6 +60,14 @@ This writes `setup_YYYY-MM-DD.log` (mode 600) in the current directory. Delete i
 
 ### User Creation
 When adding a new user, the script generates a temporary file in the `./login` directory containing the username, password, and paths to SSH keys. **Remember to download these and delete the file from the server!**
+
+### ⚠ Leftover Secrets — Read This
+The script generates unencrypted (no passphrase) private SSH keys and, for new users, prints a plaintext password — both end up on disk:
+
+* **Step 6 (root SSH keys):** the `.ppk` file is printed to the screen for you to copy, and the script offers to delete it afterward — but the *original* OpenSSH private key (`~/.ssh/<hostname>-<date>`) is **not** deleted automatically and stays on the server.
+* **Step 9 (add user):** the credentials file in `./login/<user>_temp_<date>.txt` contains the plaintext password *and* points at an unencrypted private key under `/home/<user>/.ssh/`. Neither is removed automatically.
+
+Once you've copied a key/password to your own machine, **delete the server-side copy** — a private key that grants access to a server is not useful sitting unencrypted on that same server; it's just extra blast radius if the server is ever compromised.
 
 ### Security First
 The script encourages best practices by:
