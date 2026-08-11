@@ -30,7 +30,7 @@ This script seamlessly integrates with my custom LAMP/LEMP installer:
 
 ## 🚀 Quick Start
 
-> **Warning:** This script must be run as **root** or with **sudo** privileges.
+> **Warning:** This script must be run as **root** or with **** privileges.
 
 1.  **Download the script:**
     ```bash
@@ -44,7 +44,7 @@ This script seamlessly integrates with my custom LAMP/LEMP installer:
 
 3.  **Run it:**
     ```bash
-    sudo ./setup.sh
+    ./setup.sh
     ```
 
 ---
@@ -54,7 +54,7 @@ This script seamlessly integrates with my custom LAMP/LEMP installer:
 ### Logging
 Off by default. Private key material (e.g. the PPK dump in step 6) is printed to the screen, so a full transcript could leak a private key onto disk. Enable it only when debugging the script itself:
 ```bash
-sudo bash setup.sh --log
+./setup.sh --log
 ```
 This writes `setup_YYYY-MM-DD.log` (mode 600) in the current directory. Delete it once you're done.
 
