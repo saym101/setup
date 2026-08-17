@@ -966,7 +966,7 @@ network_revert_interfaces() {
 
 network_apply_interfaces() {
     local iface="$1" mode="$2" ip="$3" cidr="$4" gw="$5" dns="$6"
-    local file="/etc/network/interfaces" tmp
+    local file="/etc/network/interfaces" tmp d
     NET_REVERT_TARGET_FILE="$file"
     NET_REVERT_IFACE="$iface"
     NET_REVERT_BACKUP_FILE=$(backup_file "$file")
@@ -1000,6 +1000,20 @@ network_apply_interfaces() {
         echo "${colors[r]}Ошибка применения через ifup/ifdown.${colors[x]}"
         network_revert_interfaces
         return 1
+    fi
+    # dns-nameservers в /etc/network/interfaces работает только если установлен
+    # пакет resolvconf с интеграцией в ifupdown. Без него запись молча
+    # игнорируется, а dhclient при выходе из DHCP чистит свои старые записи —
+    # /etc/resolv.conf остаётся пустым. Прописываем DNS напрямую как страховку,
+    # но только если файл не является симлинком (то есть им не управляет
+    # systemd-resolved/resolvconf).
+    if [ "$mode" != "dhcp" ] && [ -n "$dns" ] && [ ! -L /etc/resolv.conf ]; then
+        backup_file /etc/resolv.conf >/dev/null
+        {
+            for d in $dns; do
+                echo "nameserver $d"
+            done
+        } > /etc/resolv.conf
     fi
     if [ "$running_via_ssh" -eq 1 ]; then
         network_confirm_or_rollback network_revert_interfaces
@@ -1053,6 +1067,17 @@ network_show_after_change() {
     if [ "$running_via_ssh" -eq 1 ]; then
         echo "${colors[g]}[OK] Текущая SSH-сессия активна${colors[x]}"
     fi
+    network_check_dns_health
+}
+
+# Проверяет, что после изменения сети остались рабочие DNS-серверы,
+# и при необходимости сразу предлагает их настроить.
+network_check_dns_health() {
+    if [ -z "$(network_get_dns)" ] || ! getent hosts ya.ru >/dev/null 2>&1; then
+        echo
+        echo "${colors[r]}ВНИМАНИЕ: DNS не отвечает или список серверов пуст (/etc/resolv.conf).${colors[x]}"
+        confirm "Настроить DNS сейчас?" "y" && network_configure_dns
+    fi
 }
 
 # --- IPv4: настройка / DHCP-Static ---
@@ -1068,6 +1093,10 @@ network_configure_ipv4() {
     [ -z "$cur_cidr" ] || [ "$cur_cidr" = "$cur_addr" ] && cur_cidr=24
     cur_gw=$(network_get_default_gateway)
     cur_dns=$(network_get_dns)
+    if [ -z "$cur_dns" ]; then
+        cur_dns="1.1.1.1 8.8.8.8"
+        echo "${colors[y]}Текущие DNS не обнаружены, подставлены значения по умолчанию.${colors[x]}"
+    fi
 
     local new_ip new_cidr new_gw new_dns
     read -r -e -i "$cur_ip" -p "IPv4 [$cur_ip]: " new_ip
@@ -1098,6 +1127,11 @@ network_configure_ipv4() {
             return 1
         fi
     done
+
+    if [ -z "$new_dns" ]; then
+        echo "${colors[r]}ВНИМАНИЕ: список DNS пуст. После применения сервер останется без DNS-серверов.${colors[x]}"
+        confirm_dangerous "Продолжить без DNS?" || { echo "${colors[c]}Отменено.${colors[x]}"; return 1; }
+    fi
 
     if [ "$running_via_ssh" -eq 1 ]; then
         echo
@@ -1147,6 +1181,10 @@ network_configure_gateway() {
 # --- DNS ---
 network_dns_apply() {
     local dns_list="$1" iface ip cidr gw addr
+    if [ -z "$dns_list" ]; then
+        echo "${colors[r]}ВНИМАНИЕ: список DNS пуст. После применения сервер останется без DNS-серверов.${colors[x]}"
+        confirm_dangerous "Продолжить без DNS?" || { echo "${colors[c]}Отменено.${colors[x]}"; return 1; }
+    fi
     network_select_interface || return
     iface="$NET_SELECTED_IFACE"
     addr=$(network_get_interface_ipv4 "$iface")
@@ -1185,8 +1223,10 @@ network_configure_dns() {
                 fi
                 ;;
             3)
-                local new_dns_list d ok=1
-                read -r -e -i "$(network_get_dns)" -p "Новый список DNS через пробел: " new_dns_list
+                local new_dns_list d ok=1 cur_dns_list
+                cur_dns_list=$(network_get_dns)
+                [ -z "$cur_dns_list" ] && cur_dns_list="1.1.1.1 8.8.8.8"
+                read -r -e -i "$cur_dns_list" -p "Новый список DNS через пробел: " new_dns_list
                 for d in $new_dns_list; do
                     { validate_ipv4 "$d" || validate_ipv6 "$d"; } || ok=0
                 done
@@ -1301,7 +1341,10 @@ network_configure_ipv6() {
             esac
             ;;
         3)
-            confirm_dangerous "Отключить IPv6 на $iface?" && sysctl -w "net.ipv6.conf.${iface}.disable_ipv6=1"
+            if confirm_dangerous "Отключить IPv6 на $iface?"; then
+                sysctl -w "net.ipv6.conf.${iface}.disable_ipv6=1"
+                network_check_dns_health
+            fi
             ;;
         *) echo "${colors[r]}Неверный выбор.${colors[x]}" ;;
     esac
@@ -1416,6 +1459,91 @@ network_change_mtu() {
             [ -n "$conn" ] && nmcli con mod "$conn" 802-3-ethernet.mtu "$new_mtu"
             ;;
         *) echo "${colors[c]}Значение применено только на время работы (runtime). Для постоянства отредактируйте конфигурацию backend вручную.${colors[x]}" ;;
+    esac
+}
+
+# --- MAC-адрес ---
+network_random_mac() {
+    printf '02:%02x:%02x:%02x:%02x:%02x\n' \
+        "$((RANDOM % 256))" "$((RANDOM % 256))" "$((RANDOM % 256))" "$((RANDOM % 256))" "$((RANDOM % 256))"
+}
+
+network_change_mac() {
+    network_select_interface || return
+    local iface="$NET_SELECTED_IFACE" cur_mac new_mac mode
+    cur_mac=$(cat "/sys/class/net/$iface/address" 2>/dev/null)
+    echo "Текущий MAC-адрес $iface: $cur_mac"
+    echo "1. Задать конкретный MAC-адрес"
+    echo "2. Сгенерировать случайный MAC"
+    echo "0. Назад"
+    read -r -p "Выбор: " mode
+    case "$mode" in
+        1) read -r -p "Новый MAC-адрес (XX:XX:XX:XX:XX:XX): " new_mac ;;
+        2)
+            new_mac=$(network_random_mac)
+            echo "Сгенерирован: $new_mac"
+            ;;
+        0) return ;;
+        *) echo "${colors[r]}Неверный выбор.${colors[x]}"; return ;;
+    esac
+
+    if ! [[ "$new_mac" =~ ^[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}$ ]]; then
+        echo "${colors[r]}Некорректный формат MAC-адреса.${colors[x]}"
+        return 1
+    fi
+
+    if [ "$running_via_ssh" -eq 1 ] && [ "$iface" = "$(network_get_default_interface)" ]; then
+        echo "${colors[r]}ВНИМАНИЕ: это интерфейс, через который может проходить текущая SSH-сессия. Смена MAC кратковременно отключит интерфейс.${colors[x]}"
+        show_ssh_state
+    fi
+    confirm_dangerous "Сменить MAC-адрес $iface на $new_mac?" || return
+
+    if ip link set dev "$iface" down && ip link set dev "$iface" address "$new_mac" && ip link set dev "$iface" up; then
+        echo "${colors[g]}[OK] MAC-адрес изменён (runtime): $new_mac${colors[x]}"
+    else
+        echo "${colors[r]}[ERROR] Не удалось изменить MAC-адрес.${colors[x]}"
+        ip link set dev "$iface" up 2>/dev/null
+        return 1
+    fi
+
+    network_detect_backend
+    case "$NET_BACKEND" in
+        netplan)
+            local file="/etc/netplan/93-setup-sh-${iface}-mac.yaml"
+            {
+                echo "network:"
+                echo "  version: 2"
+                echo "  ethernets:"
+                echo "    ${iface}:"
+                echo "      macaddress: ${new_mac}"
+            } > "$file"
+            netplan apply
+            ;;
+        networkmanager)
+            local conn; conn=$(network_nm_get_connection "$iface")
+            [ -n "$conn" ] && nmcli con mod "$conn" 802-3-ethernet.cloned-mac-address "$new_mac"
+            ;;
+        networkd)
+            local link_file="/etc/systemd/network/10-${iface}.link"
+            {
+                echo "[Match]"
+                echo "OriginalName=${iface}"
+                echo
+                echo "[Link]"
+                echo "MACAddress=${new_mac}"
+            } > "$link_file"
+            echo "${colors[y]}Файл $link_file создан. Правило udev применится при следующей загрузке/пересоздании интерфейса.${colors[x]}"
+            ;;
+        interfaces)
+            if grep -qE "^iface[[:space:]]+${iface}[[:space:]]" /etc/network/interfaces 2>/dev/null; then
+                backup_file /etc/network/interfaces >/dev/null
+                sed -i -E "/^iface[[:space:]]+${iface}[[:space:]]/a\\    hwaddress ether ${new_mac}" /etc/network/interfaces
+                echo "${colors[y]}Добавлена строка 'hwaddress ether' в /etc/network/interfaces.${colors[x]}"
+            else
+                echo "${colors[c]}Секция iface для $iface не найдена в /etc/network/interfaces — MAC изменён только на время работы (runtime).${colors[x]}"
+            fi
+            ;;
+        *) echo "${colors[c]}MAC изменён только на время работы (runtime). Для постоянства настройте backend вручную.${colors[x]}" ;;
     esac
 }
 
@@ -1642,9 +1770,10 @@ network_menu() {
         echo "6. Настроить IPv6"
         echo "7. Управление маршрутами"
         echo "8. Изменить MTU"
-        echo "9. Управление интерфейсами"
-        echo "10. Изменить hostname"
-        echo "11. Диагностика сети"
+        echo "9. Изменить MAC-адрес"
+        echo "10. Управление интерфейсами"
+        echo "11. Изменить hostname"
+        echo "12. Диагностика сети"
         echo "0. Назад"
         read -r -p "${colors[y]}Выбор:${colors[x]} " c
         case "$c" in
@@ -1656,9 +1785,10 @@ network_menu() {
             6) network_configure_ipv6; pause_menu ;;
             7) network_routes_menu ;;
             8) network_change_mtu; pause_menu ;;
-            9) network_interfaces_menu ;;
-            10) setup_hostname; pause_menu ;;
-            11) network_diagnostics_menu ;;
+            9) network_change_mac; pause_menu ;;
+            10) network_interfaces_menu ;;
+            11) setup_hostname; pause_menu ;;
+            12) network_diagnostics_menu ;;
             0) return ;;
             *) echo "${colors[r]}Неверный выбор.${colors[x]}" ;;
         esac
