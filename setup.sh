@@ -423,9 +423,9 @@ setup_chrony() {
             if apt-get update && apt-get install -y chrony; then
                 echo "${colors[y]}Chrony успешно установлен.${colors[x]}"
                 cp /etc/chrony/chrony.conf "/etc/chrony/chrony.conf.original"
-                while IFS= read -r server; do
-                    [ -n "$server" ] && echo "pool $server iburst" >> /etc/chrony/chrony.conf
-                done <<< "$chrony_servers"
+                for server in $chrony_servers; do
+                    echo "pool $server iburst" >> /etc/chrony/chrony.conf
+                done
                 systemctl enable --now chrony
                 sleep 2
                 if systemctl restart chrony && chronyc sources; then
