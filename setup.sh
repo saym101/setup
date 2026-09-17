@@ -966,10 +966,20 @@ network_revert_interfaces() {
 
 network_apply_interfaces() {
     local iface="$1" mode="$2" ip="$3" cidr="$4" gw="$5" dns="$6"
-    local file="/etc/network/interfaces" tmp d
+    local file="/etc/network/interfaces" tmp d use_resolvectl_hook=0
     NET_REVERT_TARGET_FILE="$file"
     NET_REVERT_IFACE="$iface"
     NET_REVERT_BACKUP_FILE=$(backup_file "$file")
+    # На Debian 12+ /etc/resolv.conf обычно симлинк на stub-resolv.conf
+    # systemd-resolved. dns-nameservers в этом случае ifupdown'ом молча
+    # игнорируется (нет хука resolvconf), а прямая перезапись resolv.conf
+    # ничего не даст — резолвинг всё равно идёт через 127.0.0.53. Регистрируем
+    # DNS для интерфейса через resolvectl хуком post-up, чтобы это применялось
+    # и сейчас, и при каждом следующем ifup (в т.ч. после перезагрузки).
+    if [ "$mode" != "dhcp" ] && [ -n "$dns" ] && [ -L /etc/resolv.conf ] \
+        && command_exists resolvectl && systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+        use_resolvectl_hook=1
+    fi
     tmp=$(mktemp)
     awk -v iface="$iface" '
         BEGIN { skip = 0 }
@@ -992,7 +1002,13 @@ network_apply_interfaces() {
             echo "    address ${ip}"
             echo "    netmask $(network_cidr_to_netmask "$cidr")"
             [ -n "$gw" ] && echo "    gateway ${gw}"
-            [ -n "$dns" ] && echo "    dns-nameservers ${dns}"
+            if [ -n "$dns" ]; then
+                echo "    dns-nameservers ${dns}"
+                if [ "$use_resolvectl_hook" -eq 1 ]; then
+                    echo "    post-up resolvectl dns ${iface} ${dns}"
+                    echo "    post-up resolvectl domain ${iface} '~.'"
+                fi
+            fi
         fi
     } >> "$tmp"
     mv "$tmp" "$file"
@@ -1001,13 +1017,16 @@ network_apply_interfaces() {
         network_revert_interfaces
         return 1
     fi
-    # dns-nameservers в /etc/network/interfaces работает только если установлен
-    # пакет resolvconf с интеграцией в ifupdown. Без него запись молча
-    # игнорируется, а dhclient при выходе из DHCP чистит свои старые записи —
-    # /etc/resolv.conf остаётся пустым. Прописываем DNS напрямую как страховку,
-    # но только если файл не является симлинком (то есть им не управляет
-    # systemd-resolved/resolvconf).
-    if [ "$mode" != "dhcp" ] && [ -n "$dns" ] && [ ! -L /etc/resolv.conf ]; then
+    if [ "$use_resolvectl_hook" -eq 1 ]; then
+        # Подстраховка на случай, если post-up по какой-то причине не сработал
+        # (например, ifup не пересоздавал линк, а просто освежил адрес).
+        resolvectl dns "$iface" $dns >/dev/null 2>&1
+        resolvectl domain "$iface" '~.' >/dev/null 2>&1
+    elif [ "$mode" != "dhcp" ] && [ -n "$dns" ] && [ ! -L /etc/resolv.conf ]; then
+        # Классический ifupdown без systemd-resolved и без пакета resolvconf:
+        # dns-nameservers молча игнорируется, а dhclient при выходе из DHCP
+        # чистит свои старые записи — /etc/resolv.conf остаётся пустым.
+        # Прописываем DNS напрямую как страховку.
         backup_file /etc/resolv.conf >/dev/null
         {
             for d in $dns; do
