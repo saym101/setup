@@ -51,15 +51,21 @@ rsync
 socat
 traceroute
 unzip
+wget
 zip
 @7ZIP@
 "
 optional_packages="
 ethtool
-nmap
-tcpdump
+mtr-tiny
 net-tools
+nmap
+smartmontools
+sysstat
+tcpdump
+tmux
 qrencode
+whois
 "
 chrony_servers="0.ru.pool.ntp.org 1.ru.pool.ntp.org 2.ru.pool.ntp.org 3.ru.pool.ntp.org"
 
@@ -291,6 +297,47 @@ software_normalize_list() {
     echo "$1" | tr '\n' ' ' | tr -s ' ' | sed 's/^ *//;s/ *$//'
 }
 
+# Преднастройка tmux (личный конфиг пользователя, раскатанный ранее вручную
+# по флоту): mouse, длинная история, status-bar с hostname/временем,
+# vi-биндинги, автоподключение к сессии 'main' при SSH-логине.
+software_configure_tmux() {
+    local pkg found=0
+    for pkg in "$@"; do
+        [ "$pkg" = "tmux" ] && found=1
+    done
+    [ "$found" -eq 1 ] || return 0
+    command_exists tmux || return 0
+
+    {
+        echo "set -g mouse on"
+        echo "set -g history-limit 50000"
+        echo "set -g status-left '#[fg=green]#S '"
+        echo "set -g status-right '#[fg=cyan]#H #[fg=yellow]%H:%M '"
+        echo "setw -g mode-keys vi"
+        echo "set -sg escape-time 10"
+        echo "set -g renumber-windows on"
+        echo "setw -g monitor-activity on"
+        echo "set -g visual-activity on"
+        echo "bind r source-file /root/.tmux.conf \\; display-message 'Config reloaded'"
+    } > /root/.tmux.conf
+
+    if ! grep -q "tmux-autostart" /root/.bashrc 2>/dev/null; then
+        {
+            echo ""
+            echo "# >>> tmux-autostart >>>"
+            echo 'if command -v tmux >/dev/null 2>&1 && [ -z "$TMUX" ] && [ -n "$SSH_CONNECTION" ]; then'
+            echo '    tmux attach -t main || tmux new -s main'
+            echo "fi"
+            echo "shopt -s histappend"
+            echo 'PROMPT_COMMAND="history -a; $PROMPT_COMMAND"'
+            echo "# <<< tmux-autostart <<<"
+        } >> /root/.bashrc
+    fi
+    echo
+    echo "${colors[y]}ВНИМАНИЕ: tmux преднастроен под личный конфиг.${colors[x]}"
+    echo "${colors[y]}Конфиг лежит в /root/.tmux.conf, автозапуск сессии 'main' добавлен в /root/.bashrc.${colors[x]}"
+}
+
 software_install_list() {
     local title="$1" list user_input pkg_array
     if [ "$APT_UPDATED" -eq 0 ]; then
@@ -316,6 +363,7 @@ software_install_list() {
     read -r -a pkg_array <<< "$user_input"
     if apt-get install -y "${pkg_array[@]}"; then
         echo "${colors[y]}Установка «$title» завершена.${colors[x]}"
+        software_configure_tmux "${pkg_array[@]}"
     else
         echo "${colors[r]}Ошибка при установке пакетов.${colors[x]}"
     fi
@@ -340,6 +388,16 @@ setup_diagnostic_tools() {
     fi
 }
 
+setup_software_all() {
+    echo "${colors[g]}Установка полного набора (рекомендуемый + диагностика)${colors[x]}"
+    if confirm "${colors[y]}Установить оба набора программ?${colors[x]}" "n"; then
+        software_install_list "полный набор" "$standard_packages
+$optional_packages"
+    else
+        echo "${colors[r]}Установка отменена.${colors[x]}"
+    fi
+}
+
 software_menu() {
     local c
     while true; do
@@ -348,11 +406,13 @@ software_menu() {
         echo
         echo "1. Установить рекомендуемый набор (возможно изменить список вручную)"
         echo "2. Установить диагностические утилиты (возможно изменить список вручную)"
+        echo "3. Установить всё (рекомендуемый + диагностика)"
         echo "0. Назад"
         read -r -p "${colors[y]}Выбор:${colors[x]} " c
         case "$c" in
             1) setup_software; pause_menu ;;
             2) setup_diagnostic_tools; pause_menu ;;
+            3) setup_software_all; pause_menu ;;
             0) return ;;
             *) echo "${colors[r]}Неверный выбор.${colors[x]}" ;;
         esac
