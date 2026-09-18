@@ -7,17 +7,22 @@ A comprehensive, interactive Bash script for configuring and administering a Deb
 ## ✨ Features
 
 ### 📦 Software
-* Two independently editable package sets — a **recommended** baseline and a separate **diagnostic tools** set (`ethtool`, `nmap`, `tcpdump`, `net-tools`, `qrencode`) — both shown before install and editable inline (add/remove packages) without touching the code.
+* Two independently editable package sets — a **recommended** baseline and a separate **diagnostic tools** set (`ethtool`, `mtr-tiny`, `net-tools`, `nmap`, `smartmontools`, `sysstat`, `tcpdump`, `tmux`, `qrencode`, `whois`) — plus an **"install everything"** option combining both lists into one editable prompt. Both are shown before install and editable inline (add/remove packages) without touching the code.
+* The 7-Zip package name is resolved automatically (`p7zip-full` on Debian 12/Ubuntu 22.04-24.04, `7zip` starting with Debian 13/newer Ubuntu) — upstream renamed the package between releases, and hardcoding either name broke the whole install on part of the supported versions.
+* If `tmux` ends up in the install, the script drops in a ready `/root/.tmux.conf` (mouse, 50k-line history, hostname/clock status bar, vi keybindings) and an idempotent session-autostart block in `/root/.bashrc`, printing a warning with the file paths afterward.
 
 ### 🌐 Network
 A full network-configuration submenu that never assumes `eth0` and never guesses your setup:
 * **Backend-aware:** detects whether the system is managed by **Netplan**, **NetworkManager**, **systemd-networkd**, or classic `/etc/network/interfaces`, and shows you which one before making any change.
-* Static IPv4 / DHCP toggle, gateway, multi-server DNS (add/edit/remove), IPv6 (SLAAC/DHCPv6/static/disable), static routes, MTU, per-interface up/down, and a network service restart.
+* Static IPv4 / DHCP toggle, gateway, multi-server DNS (add/edit/remove), IPv6 (SLAAC/DHCPv6/static/disable), static routes, MTU, MAC address change (specific or random), DHCP client-id normalization, per-interface up/down, and a network service restart.
+* **DNS survives the DHCP→static switch:** on the classic `interfaces` backend without the `resolvconf` package, `dns-nameservers` is silently ignored by ifupdown, and on systemd-resolved systems (Debian 13+) DNS is additionally registered via `resolvectl` — without this the server was left without DNS after switching to a static IP.
+* **Disabling IPv6 survives reboots and doesn't get reverted by the network service:** persisted via `/etc/sysctl.d` plus the backend's own config (`nmcli ipv6.method`, a netplan override, `systemd-networkd`) — a bare `sysctl -w` isn't enough, since NetworkManager/netplan/networkd re-enable IPv6 on their own at the next reconnect.
+* **DHCP client-id normalization:** cloud-init/Proxmox images send a DUID instead of the plain MAC to the DHCP server by default (showing up as a long hex string in your router's lease table) — this menu item forces the client-id back to the MAC for any backend.
 * Full diagnostics submenu: `ip addr/link/route`, gateway/DNS checks, ping, open local ports, active connections, remote TCP port check.
 * Hostname configuration lives here.
 * **Safety net:** Netplan changes apply via `netplan try` (automatic rollback if not confirmed within 120s); other backends get a manual confirm-or-revert-from-backup window. Any change to IP/gateway/interface state made over an active SSH session shows an explicit warning before it's applied.
 
-### 🌍 Location
+### 🌍 NTP
 Timezone and `chrony` (NTP) configuration grouped in one submenu, plus a time-sync status check and a quick view of current Chrony sources.
 
 ### 🔒 Hardened SSH
@@ -101,6 +106,6 @@ The script encourages best practices and actively resists SSH lockouts:
 ---
 
 ## 📋 Requirements
-* **OS:** Debian 10/11/12 or Ubuntu 20.04/22.04+ (systemd-based)
+* **OS:** Debian 12 (Bookworm) / 13 (Trixie), Ubuntu 22.04 / 24.04 LTS, 25.04, 25.10, 26.04 LTS. Other versions are untested — their support has either already ended or is about to.
 * **Privileges:** Root access
 * Network module auto-detects whatever backend is installed (Netplan / NetworkManager / systemd-networkd / ifupdown) — no extra packages required beyond what your OS already ships with.
