@@ -1704,9 +1704,24 @@ network_change_mac() {
 # в этой строке есть — это её последние 6 байт). Классический ifupdown+dhclient
 # так не делает и сразу шлёт MAC. Эта функция принудительно переключает
 # client-id на обычный MAC для любого backend'а.
+network_iface_uses_dhcp() {
+    # Адрес, полученный по DHCP, ip addr всегда помечает флагом "dynamic" —
+    # это верно для любого backend'а и не требует разбора конфигов.
+    ip -4 -o addr show dev "$1" 2>/dev/null | grep -q ' dynamic '
+}
+
 network_fix_dhcp_clientid() {
     network_select_interface || return
     local iface="$NET_SELECTED_IFACE"
+
+    if ! network_iface_uses_dhcp "$iface"; then
+        echo "${colors[y]}Интерфейс $iface сейчас настроен статически — DHCP-запросы вообще не${colors[x]}"
+        echo "${colors[y]}отправляются, поэтому client-id (ни длинный DUID, ни обычный MAC)${colors[x]}"
+        echo "${colors[y]}роутеру сейчас не передаётся. Если нужно нормализовать client-id —${colors[x]}"
+        echo "${colors[y]}сначала верните DHCP (пункт 3), примените, и уже потом снова статику.${colors[x]}"
+        confirm "Всё равно записать настройку (пригодится при следующем включении DHCP)?" "n" || return 0
+    fi
+
     echo "На cloud-init/Proxmox-образах DHCP client-id по умолчанию — это DUID"
     echo "(длинная hex-строка), а не MAC-адрес интерфейса. Роутер/DHCP-сервер"
     echo "видит именно client-id, а не аппаратный MAC."
@@ -1764,8 +1779,13 @@ network_fix_dhcp_clientid() {
         interfaces)
             local file="/etc/dhcp/dhclient.conf"
             if [ ! -f "$file" ]; then
-                echo "${colors[r]}Файл $file не найден (isc-dhcp-client не установлен?).${colors[x]}"
-                return 1
+                # На статике isc-dhcp-client вполне может быть не установлен —
+                # ставим, чтобы настройка сработала при следующем включении DHCP.
+                install_package isc-dhcp-client || { echo "${colors[r]}Не удалось установить isc-dhcp-client.${colors[x]}"; return 1; }
+                if [ ! -f "$file" ]; then
+                    echo "${colors[r]}Файл $file всё ещё не найден после установки пакета.${colors[x]}"
+                    return 1
+                fi
             fi
             backup_file "$file" >/dev/null
             if grep -q "^[[:space:]]*send dhcp-client-identifier" "$file"; then
