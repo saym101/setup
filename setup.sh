@@ -52,7 +52,7 @@ socat
 traceroute
 unzip
 zip
-7zip
+@7ZIP@
 "
 optional_packages="
 ethtool
@@ -148,6 +148,12 @@ pause_menu() {
 
 command_exists() {
     command -v "$1" >/dev/null 2>&1
+}
+
+# Пакет есть в индексе apt (для выбора правильного имени пакета между
+# версиями дистрибутива, где имя меняется). Требует свежего apt-get update.
+apt_pkg_available() {
+    apt-cache show "$1" 2>/dev/null | grep -q '^Package:'
 }
 
 install_package() {
@@ -287,18 +293,26 @@ software_normalize_list() {
 
 software_install_list() {
     local title="$1" list user_input pkg_array
+    if [ "$APT_UPDATED" -eq 0 ]; then
+        echo "${colors[y]}Обновление списка пакетов apt...${colors[x]}"
+        apt-get update
+        APT_UPDATED=1
+    fi
     list=$(software_normalize_list "$2")
+    # Пакет 7-Zip переименован апстримом: "p7zip-full" на Debian 12/Ubuntu
+    # 22.04-24.04, "7zip" начиная с Debian 13/Ubuntu 24.10+. Выбираем то, что
+    # реально есть в индексе apt на этой системе.
+    if [[ "$list" == *"@7ZIP@"* ]]; then
+        local sevenzip_pkg="p7zip-full"
+        apt_pkg_available 7zip && sevenzip_pkg="7zip"
+        list="${list//@7ZIP@/$sevenzip_pkg}"
+    fi
     echo "${colors[r]}Предварительный список программ:${colors[x]}"
     echo "$list"
     while true; do
         read -r -e -i "$list" -p "${colors[y]}Список программ можно изменить (добавить или удалить) или оставить как есть:${colors[x]} " user_input
         [[ -n "$user_input" ]] && break
     done
-    echo "${colors[y]}Обновление списка пакетов...${colors[x]}"
-    if [ "$APT_UPDATED" -eq 0 ]; then
-        apt-get update
-        APT_UPDATED=1
-    fi
     read -r -a pkg_array <<< "$user_input"
     if apt-get install -y "${pkg_array[@]}"; then
         echo "${colors[y]}Установка «$title» завершена.${colors[x]}"
@@ -488,7 +502,7 @@ setup_chrony() {
 location_menu() {
     while true; do
         clear
-        echo "${colors[g]}=== Настройка расположения ===${colors[x]}"
+        echo "${colors[g]}=== Настройка NTP ===${colors[x]}"
         echo
         echo "1. Изменить часовой пояс"
         echo "2. Настроить Chrony"
@@ -1621,6 +1635,91 @@ network_change_mac() {
     esac
 }
 
+# --- DHCP client-id (реальный MAC вместо DUID) ---
+# Cloud-init образы Proxmox (и вообще системы с рендерером systemd-networkd/
+# NetworkManager) по умолчанию шлют DHCP-серверу client-id вида DUID-LLT —
+# длинную hex-строку (IAID + тип + hwtype + время + MAC), а не сам MAC. В
+# таблице аренд роутера это выглядит примерно как
+# "1199683500010001323e9c01bc2411996835" вместо "bc:24:11:99:68:35" (сам MAC
+# в этой строке есть — это её последние 6 байт). Классический ifupdown+dhclient
+# так не делает и сразу шлёт MAC. Эта функция принудительно переключает
+# client-id на обычный MAC для любого backend'а.
+network_fix_dhcp_clientid() {
+    network_select_interface || return
+    local iface="$NET_SELECTED_IFACE"
+    echo "На cloud-init/Proxmox-образах DHCP client-id по умолчанию — это DUID"
+    echo "(длинная hex-строка), а не MAC-адрес интерфейса. Роутер/DHCP-сервер"
+    echo "видит именно client-id, а не аппаратный MAC."
+    confirm_dangerous "Настроить $iface на отправку обычного MAC как DHCP client-id?" || return
+
+    network_detect_backend
+    case "$NET_BACKEND" in
+        netplan)
+            local file="/etc/netplan/92-setup-sh-${iface}-dhcp-id.yaml"
+            {
+                echo "network:"
+                echo "  version: 2"
+                echo "  ethernets:"
+                echo "    ${iface}:"
+                echo "      dhcp-identifier: mac"
+            } > "$file"
+            chmod 600 "$file"
+            if netplan apply; then
+                echo "${colors[g]}[OK] dhcp-identifier: mac прописан для $iface (netplan).${colors[x]}"
+            else
+                echo "${colors[r]}[ERROR] netplan apply завершился с ошибкой.${colors[x]}"
+                return 1
+            fi
+            ;;
+        networkmanager)
+            local conn; conn=$(network_nm_get_connection "$iface")
+            if [ -z "$conn" ]; then
+                echo "${colors[r]}Активное подключение NetworkManager для $iface не найдено.${colors[x]}"
+                return 1
+            fi
+            nmcli con mod "$conn" ipv4.dhcp-client-id mac
+            nmcli con up "$conn" >/dev/null 2>&1
+            echo "${colors[g]}[OK] ipv4.dhcp-client-id=mac установлен для подключения $conn.${colors[x]}"
+            ;;
+        networkd)
+            local file="/etc/systemd/network/10-${iface}.network"
+            if [ ! -f "$file" ]; then
+                echo "${colors[r]}Файл $file не найден — сначала настройте интерфейс через IPv4/DHCP в этом скрипте.${colors[x]}"
+                return 1
+            fi
+            backup_file "$file" >/dev/null
+            if grep -q "^\[DHCPv4\]" "$file"; then
+                if grep -q "^ClientIdentifier=" "$file"; then
+                    sed -i "s/^ClientIdentifier=.*/ClientIdentifier=mac/" "$file"
+                else
+                    sed -i "/^\[DHCPv4\]/a ClientIdentifier=mac" "$file"
+                fi
+            else
+                printf '\n[DHCPv4]\nClientIdentifier=mac\n' >> "$file"
+            fi
+            systemctl restart systemd-networkd
+            networkctl reconfigure "$iface" 2>/dev/null
+            echo "${colors[g]}[OK] ClientIdentifier=mac прописан в $file.${colors[x]}"
+            ;;
+        interfaces)
+            local file="/etc/dhcp/dhclient.conf"
+            if [ ! -f "$file" ]; then
+                echo "${colors[r]}Файл $file не найден (isc-dhcp-client не установлен?).${colors[x]}"
+                return 1
+            fi
+            backup_file "$file" >/dev/null
+            if grep -q "^[[:space:]]*send dhcp-client-identifier" "$file"; then
+                sed -i "s/^[[:space:]]*send dhcp-client-identifier.*/send dhcp-client-identifier = hardware;/" "$file"
+            else
+                echo "send dhcp-client-identifier = hardware;" >> "$file"
+            fi
+            ifdown "$iface" 2>/dev/null; ifup "$iface"
+            echo "${colors[g]}[OK] dhclient настроен отправлять аппаратный MAC как client-id.${colors[x]}"
+            ;;
+        *) echo "${colors[c]}Backend не определён — настройте DHCP client-id вручную.${colors[x]}" ;;
+    esac
+}
+
 # --- Управление интерфейсами ---
 network_interfaces_menu() {
     local c
@@ -1845,9 +1944,10 @@ network_menu() {
         echo "7. Управление маршрутами"
         echo "8. Изменить MTU"
         echo "9. Изменить MAC-адрес"
-        echo "10. Управление интерфейсами"
-        echo "11. Изменить hostname"
-        echo "12. Диагностика сети"
+        echo "10. Нормализовать DHCP client-id (MAC вместо DUID)"
+        echo "11. Управление интерфейсами"
+        echo "12. Изменить hostname"
+        echo "13. Диагностика сети"
         echo "0. Назад"
         read -r -p "${colors[y]}Выбор:${colors[x]} " c
         case "$c" in
@@ -1860,9 +1960,10 @@ network_menu() {
             7) network_routes_menu ;;
             8) network_change_mtu; pause_menu ;;
             9) network_change_mac; pause_menu ;;
-            10) network_interfaces_menu ;;
-            11) setup_hostname; pause_menu ;;
-            12) network_diagnostics_menu ;;
+            10) network_fix_dhcp_clientid; pause_menu ;;
+            11) network_interfaces_menu ;;
+            12) setup_hostname; pause_menu ;;
+            13) network_diagnostics_menu ;;
             0) return ;;
             *) echo "${colors[r]}Неверный выбор.${colors[x]}" ;;
         esac
@@ -3958,7 +4059,7 @@ while true; do
     echo "${colors[c]}1.${colors[x]}  ${colors[g]}Установка ПО${colors[x]}"
     echo "${colors[c]}2.${colors[x]}  ${colors[g]}Настройка сети${colors[x]}"
     echo "${colors[c]}3.${colors[x]}  ${colors[g]}Изменить локаль${colors[x]}"
-    echo "${colors[c]}4.${colors[x]}  ${colors[g]}Настройка расположения${colors[x]}"
+    echo "${colors[c]}4.${colors[x]}  ${colors[g]}Настройка NTP${colors[x]}"
     echo "${colors[c]}5.${colors[x]}  ${colors[g]}Настроить SSH-ключи${colors[x]}"
     echo "${colors[c]}6.${colors[x]}  ${colors[g]}Изменить порт SSH${colors[x]}"
     echo "${colors[c]}7.${colors[x]}  ${colors[g]}Установить и настроить UFW${colors[x]}"
