@@ -1287,6 +1287,10 @@ network_netplan_ipv6_write() {
         if [ "$mode" = "auto" ]; then
             echo "      dhcp6: true"
             echo "      accept-ra: true"
+        elif [ "$mode" = "disabled" ]; then
+            echo "      dhcp6: false"
+            echo "      accept-ra: false"
+            echo "      link-local: []"
         else
             echo "      addresses: [${ip6}/${prefix}]"
             if [ -n "$gw6" ]; then
@@ -1297,6 +1301,65 @@ network_netplan_ipv6_write() {
         fi
     } > "$file"
     chmod 600 "$file"
+}
+
+# sysctl.disable_ipv6 без persistence переживает только до перезагрузки, а на
+# backend'ах networkmanager/netplan/networkd сама сетевая служба при
+# следующем поднятии линка (DHCP-обновление, carrier-flap, systemctl restart)
+# возвращает интерфейс к своей политике ipv6 (auto) и заново включает его —
+# поэтому голого 'sysctl -w' на Debian 13 недостаточно даже без перезагрузки.
+network_disable_ipv6() {
+    local iface="$1" sysctl_file="/etc/sysctl.d/71-setup-sh-disable-ipv6-${iface}.conf"
+    sysctl -w "net.ipv6.conf.${iface}.disable_ipv6=1" >/dev/null
+    mkdir -p /etc/sysctl.d
+    printf 'net.ipv6.conf.%s.disable_ipv6 = 1\n' "$iface" > "$sysctl_file"
+    network_detect_backend
+    case "$NET_BACKEND" in
+        networkmanager)
+            local conn; conn=$(network_nm_get_connection "$iface")
+            if [ -n "$conn" ]; then
+                nmcli con mod "$conn" ipv6.method disabled
+                nmcli con up "$conn" >/dev/null 2>&1
+            fi
+            ;;
+        netplan)
+            network_netplan_ipv6_write "$iface" "disabled"
+            netplan apply
+            ;;
+        networkd)
+            local netfile="/etc/systemd/network/10-${iface}.network"
+            if [ -f "$netfile" ]; then
+                sed -i '/^LinkLocalAddressing=\|^IPv6AcceptRA=/d' "$netfile"
+                sed -i '/^\[Network\]/a LinkLocalAddressing=ipv4\nIPv6AcceptRA=false' "$netfile"
+                systemctl restart systemd-networkd
+            fi
+            ;;
+    esac
+}
+
+network_enable_ipv6() {
+    local iface="$1" sysctl_file="/etc/sysctl.d/71-setup-sh-disable-ipv6-${iface}.conf"
+    rm -f "$sysctl_file"
+    sysctl -w "net.ipv6.conf.${iface}.disable_ipv6=0" >/dev/null
+    network_detect_backend
+    case "$NET_BACKEND" in
+        networkmanager)
+            local conn; conn=$(network_nm_get_connection "$iface")
+            if [ -n "$conn" ]; then
+                nmcli con mod "$conn" ipv6.method auto
+                nmcli con up "$conn" >/dev/null 2>&1
+            fi
+            ;;
+        netplan)
+            network_netplan_ipv6_write "$iface" "auto"
+            netplan try --timeout 120
+            ;;
+        networkd)
+            local netfile="/etc/systemd/network/10-${iface}.network"
+            [ -f "$netfile" ] && sed -i '/^LinkLocalAddressing=\|^IPv6AcceptRA=/d' "$netfile"
+            systemctl restart systemd-networkd
+            ;;
+    esac
 }
 
 network_configure_ipv6() {
@@ -1310,21 +1373,7 @@ network_configure_ipv6() {
     read -r -p "Выбор: " c
     case "$c" in
         1)
-            network_detect_backend
-            case "$NET_BACKEND" in
-                networkmanager)
-                    local conn; conn=$(network_nm_get_connection "$iface")
-                    if [ -n "$conn" ]; then
-                        nmcli con mod "$conn" ipv6.method auto
-                        nmcli con up "$conn" >/dev/null 2>&1
-                    fi
-                    ;;
-                netplan)
-                    network_netplan_ipv6_write "$iface" "auto"
-                    netplan try --timeout 120
-                    ;;
-                *) echo "${colors[c]}Для этого backend настройте автоконфигурацию IPv6 вручную в файле конфигурации.${colors[x]}" ;;
-            esac
+            network_enable_ipv6 "$iface"
             ;;
         2)
             local new_ip6 new_prefix new_gw6
@@ -1343,6 +1392,8 @@ network_configure_ipv6() {
             if [ "$running_via_ssh" -eq 1 ]; then
                 confirm_dangerous "Изменение IPv6 может повлиять на доступ. Продолжить?" || return
             fi
+            rm -f "/etc/sysctl.d/71-setup-sh-disable-ipv6-${iface}.conf"
+            sysctl -w "net.ipv6.conf.${iface}.disable_ipv6=0" >/dev/null
             network_detect_backend
             case "$NET_BACKEND" in
                 networkmanager)
@@ -1356,12 +1407,16 @@ network_configure_ipv6() {
                     network_netplan_ipv6_write "$iface" "static" "$new_ip6" "$new_prefix" "$new_gw6"
                     netplan try --timeout 120
                     ;;
+                networkd)
+                    local netfile="/etc/systemd/network/10-${iface}.network"
+                    [ -f "$netfile" ] && sed -i '/^LinkLocalAddressing=\|^IPv6AcceptRA=/d' "$netfile"
+                    ;;
                 *) echo "${colors[c]}Автоматическая настройка IPv6 для этого backend не реализована. При необходимости используйте 'ip -6 addr add' вручную.${colors[x]}" ;;
             esac
             ;;
         3)
             if confirm_dangerous "Отключить IPv6 на $iface?"; then
-                sysctl -w "net.ipv6.conf.${iface}.disable_ipv6=1"
+                network_disable_ipv6 "$iface"
                 network_check_dns_health
             fi
             ;;
