@@ -434,24 +434,46 @@ setup_locale() {
                 return
             fi
         fi
-        while true; do
-            read -r -p "Введите желаемую локаль (по умолчанию $default_locale, Enter для отмены): " new_locale
-            if [ -z "$new_locale" ]; then
+        read -r -e -i "$default_locale" -p "Введите желаемую локаль (Enter с пустой строкой для отмены): " new_locale
+        if [ -z "$new_locale" ]; then
+            echo "${colors[r]}Изменение локали отменено.${colors[x]}"
+            return
+        fi
+        if ! [[ "$new_locale" =~ ^[A-Za-z_]+\.[A-Za-z0-9-]+$ ]]; then
+            echo "${colors[r]}Неверный формат локали (пример: ru_RU.UTF-8).${colors[x]}"
+            return
+        fi
+        if ! grep -qiE "Debian|Ubuntu" /etc/os-release; then
+            echo "${colors[r]}Ваша ОС не поддерживается для автоматической установки локали.${colors[x]}"
+            return
+        fi
+        # locale -a показывает нормализованное имя (utf8 вместо UTF-8)
+        local norm="${new_locale/UTF-8/utf8}"
+        if ! locale -a | grep -qix -e "$new_locale" -e "$norm"; then
+            echo "${colors[y]}Локаль '$new_locale' не сгенерирована на этом сервере.${colors[x]}"
+            if ! confirm "${colors[y]}Сгенерировать её?${colors[x]}" "y"; then
                 echo "${colors[r]}Изменение локали отменено.${colors[x]}"
                 return
             fi
-            if locale -a | grep -Fx "$new_locale" > /dev/null; then
-                break
-            else
-                echo "${colors[r]}Локаль '$new_locale' не найдена. Доступные локали: 'locale -a'.${colors[x]}"
+            if ! dpkg -s locales >/dev/null 2>&1; then
+                apt-get update && apt-get install -y locales || { echo "${colors[r]}Не удалось установить пакет locales.${colors[x]}"; return; }
             fi
-        done
-        if grep -qiE "Debian|Ubuntu" /etc/os-release; then
-            echo "LANG=\"$new_locale\"" > /etc/default/locale
-            echo "${colors[y]}Локаль '$new_locale' успешно установлена.${colors[x]}"
-        else
-            echo "${colors[r]}Ваша ОС не поддерживается для автоматической установки локали.${colors[x]}"
+            if ! grep -qE "^#?[[:space:]]*${new_locale} " /etc/locale.gen; then
+                echo "${colors[r]}Локаль '$new_locale' отсутствует в /etc/locale.gen.${colors[x]}"
+                return
+            fi
+            sed -i -E "s/^#[[:space:]]*(${new_locale} )/\1/" /etc/locale.gen
+            if ! locale-gen; then
+                echo "${colors[r]}locale-gen завершился с ошибкой.${colors[x]}"
+                return
+            fi
         fi
+        if command_exists update-locale; then
+            update-locale LANG="$new_locale"
+        else
+            echo "LANG=\"$new_locale\"" > /etc/default/locale
+        fi
+        echo "${colors[y]}Локаль '$new_locale' успешно установлена. Применится после перелогина.${colors[x]}"
     else
         echo "${colors[r]}Отмена установки локализации.${colors[x]}"
     fi
