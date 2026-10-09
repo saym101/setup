@@ -460,58 +460,23 @@ setup_locale() {
 # =========================================================
 # 05. НАСТРОЙКА РАСПОЛОЖЕНИЯ (функции; меню — в конце раздела)
 # =========================================================
-setup_timezone() {
-    echo "${colors[g]}Настройка часового пояса${colors[x]}"
-    local current_timezone
-    current_timezone=$(timedatectl | grep "Time zone" | awk '{print $3}')
-    [ -z "$current_timezone" ] && current_timezone="Не определён"
-    echo "${colors[g]}Текущий часовой пояс: $current_timezone${colors[x]}"
-    if confirm "${colors[y]}Хотите изменить часовой пояс?${colors[x]}" "n"; then
-        timedatectl list-timezones | grep "^Europe/" | nl -s ") " -w 2 | pr -3 -t -w 80
-        while true; do
-            read -r -p "Введите номер часового пояса (Enter для отмены): " choice
-            if [ -z "$choice" ]; then
-                echo "${colors[r]}Изменение часового пояса отменено.${colors[x]}"
-                return
-            fi
-            if [[ "$choice" =~ ^[0-9]+$ ]]; then
-                selected_timezone=$(timedatectl list-timezones | grep "^Europe/" | sed -n "${choice}p")
-                if [ -n "$selected_timezone" ]; then
-                    break
-                fi
-            fi
-            echo "${colors[r]}Некорректный ввод. Введите номер из списка.${colors[x]}"
-        done
-        timedatectl set-timezone "$selected_timezone"
-        echo "${colors[y]}Часовой пояс изменён на $selected_timezone.${colors[x]}"
+install_chrony() {
+    echo "${colors[g]}Установка Chrony${colors[x]}"
+    if command_exists chronyc && [ -f /etc/chrony/chrony.conf ]; then
+        echo "${colors[y]}Chrony уже установлен.${colors[x]}"
+    elif apt-get update && apt-get install -y chrony; then
+        echo "${colors[y]}Chrony успешно установлен (конфиг по умолчанию).${colors[x]}"
     else
-        echo "${colors[r]}Процедура изменения часового пояса отменена.${colors[x]}"
+        echo "${colors[r]}Ошибка при установке Chrony.${colors[x]}"
+        return
     fi
+    systemctl enable --now chrony
 }
 
 setup_chrony() {
     echo "${colors[g]}Настройка Chrony${colors[x]}"
-    if ! command -v chronyc >/dev/null 2>&1 || ! [ -f /etc/chrony/chrony.conf ]; then
-        echo "${colors[r]}Chrony не установлен или конфигурационный файл отсутствует.${colors[x]}"
-        if confirm "${colors[y]}Установить Chrony?${colors[x]}" "y"; then
-            if apt-get update && apt-get install -y chrony; then
-                echo "${colors[y]}Chrony успешно установлен.${colors[x]}"
-                cp /etc/chrony/chrony.conf "/etc/chrony/chrony.conf.original"
-                for server in $chrony_servers; do
-                    echo "pool $server iburst" >> /etc/chrony/chrony.conf
-                done
-                systemctl enable --now chrony
-                sleep 2
-                if systemctl restart chrony && chronyc sources; then
-                    :
-                else
-                    echo "${colors[r]}Ошибка при перезапуске Chrony.${colors[x]}"
-                fi
-            else
-                echo "${colors[r]}Ошибка при установке Chrony.${colors[x]}"
-                return
-            fi
-        fi
+    if ! command_exists chronyc || ! [ -f /etc/chrony/chrony.conf ]; then
+        echo "${colors[r]}Chrony не установлен. Сначала выполните пункт 1.${colors[x]}"
         return
     fi
     if ! systemctl is-active --quiet chrony; then
@@ -522,40 +487,102 @@ setup_chrony() {
             return
         fi
     fi
-    echo "${colors[y]}Текущие источники синхронизации:${colors[x]}"
-    chronyc sources
-    if confirm "${colors[y]}Хотите сменить NTP-серверы в настройках?${colors[x]}" "n"; then
-        local backup_file
-        backup_file="/etc/chrony/chrony.conf.bak_$(date +%Y%m%d_%H%M%S)"
-        cp /etc/chrony/chrony.conf "$backup_file"
-        local default_servers
-        default_servers=$(echo "$chrony_servers" | tr '\n' '|' | sed 's/|$//')
-        while true; do
-            echo -e "${colors[y]}Можете удалить весь список или любые два три сервера и вписать свой. Или оставить как есть."
-            read -r -e -i "$default_servers" -p "${colors[r]}Ваш выбор: ${colors[g]}" input_servers
-            if [[ -n "$input_servers" && "$input_servers" =~ ^[a-zA-Z0-9\ .\-]+$ ]]; then
-                break
-            else
-                echo "${colors[r]}Неверный формат ввода.${colors[x]}"
-            fi
-        done
-        local new_servers
-        new_servers=$(echo "$input_servers" | tr '|' '\n' | tr ' ' '\n' | grep -v '^$')
-        if [ -n "$new_servers" ]; then
-            local temp_conf
-            temp_conf=$(mktemp)
-            grep -v "^pool" /etc/chrony/chrony.conf > "$temp_conf"
-            while IFS= read -r server; do
-                echo "pool $server iburst" >> "$temp_conf"
-            done <<< "$new_servers"
-            mv "$temp_conf" /etc/chrony/chrony.conf
-            chmod 644 /etc/chrony/chrony.conf
-            if systemctl restart chrony && chronyc sources; then
-                :
-            else
-                echo "${colors[r]}Ошибка при перезапуске Chrony.${colors[x]}"
+    local backup_file
+    backup_file="/etc/chrony/chrony.conf.bak_$(date +%Y%m%d_%H%M%S)"
+    cp /etc/chrony/chrony.conf "$backup_file"
+    local default_servers input_servers
+    default_servers=$(echo "$chrony_servers" | tr '\n' '|' | sed 's/|$//')
+    while true; do
+        echo -e "${colors[y]}Можете удалить весь список или любые два три сервера и вписать свой. Или оставить как есть. Enter с пустой строкой — отмена."
+        read -r -e -i "$default_servers" -p "${colors[r]}Ваш выбор: ${colors[g]}" input_servers
+        echo -n "${colors[x]}"
+        if [ -z "$input_servers" ]; then
+            echo "${colors[r]}Изменение NTP-серверов отменено.${colors[x]}"
+            return
+        fi
+        if [[ "$input_servers" =~ ^[a-zA-Z0-9\ .\|\-]+$ ]]; then
+            break
+        fi
+        echo "${colors[r]}Неверный формат ввода.${colors[x]}"
+    done
+    local new_servers
+    new_servers=$(echo "$input_servers" | tr '|' '\n' | tr ' ' '\n' | grep -v '^$')
+    if [ -n "$new_servers" ]; then
+        local temp_conf
+        temp_conf=$(mktemp)
+        grep -v "^pool" /etc/chrony/chrony.conf > "$temp_conf"
+        while IFS= read -r server; do
+            echo "pool $server iburst" >> "$temp_conf"
+        done <<< "$new_servers"
+        mv "$temp_conf" /etc/chrony/chrony.conf
+        chmod 644 /etc/chrony/chrony.conf
+        if systemctl restart chrony; then
+            echo "${colors[y]}NTP-серверы обновлены. Бэкап конфига: $backup_file${colors[x]}"
+        else
+            echo "${colors[r]}Ошибка при перезапуске Chrony.${colors[x]}"
+        fi
+    fi
+}
+
+# Часовой пояс задаётся смещением от UTC, без выбора локации.
+# В tzdata знак инвертирован: UTC+3 = Etc/GMT-3, UTC-4 = Etc/GMT+4.
+setup_timezone() {
+    echo "${colors[g]}Настройка часового пояса${colors[x]}"
+    local current_timezone
+    current_timezone=$(timedatectl show -p Timezone --value 2>/dev/null)
+    [ -z "$current_timezone" ] && current_timezone="Не определён"
+    echo "${colors[g]}Текущий часовой пояс: $current_timezone${colors[x]}"
+    echo "Введите смещение от UTC числом: -12 ... -1, 0, +1 ... +14"
+    echo "Примеры: +3 (Москва), +7 (Новосибирск), -4 (восточное побережье США летом), 0 (UTC)"
+    local offset n tz
+    while true; do
+        read -r -p "Смещение UTC (Enter для отмены): " offset
+        if [ -z "$offset" ]; then
+            echo "${colors[r]}Изменение часового пояса отменено.${colors[x]}"
+            return
+        fi
+        offset="${offset#UTC}"; offset="${offset#utc}"
+        if [[ "$offset" =~ ^([+-]?)([0-9]{1,2})$ ]]; then
+            n=$((10#${BASH_REMATCH[2]}))
+            if [ "$n" -eq 0 ]; then
+                tz="Etc/UTC"; break
+            elif [ "${BASH_REMATCH[1]}" = "-" ] && [ "$n" -le 12 ]; then
+                tz="Etc/GMT+$n"; break
+            elif [ "${BASH_REMATCH[1]}" != "-" ] && [ "$n" -le 14 ]; then
+                tz="Etc/GMT-$n"; break
             fi
         fi
+        echo "${colors[r]}Некорректный ввод. Допустимо от -12 до +14.${colors[x]}"
+    done
+    if timedatectl set-timezone "$tz"; then
+        echo "${colors[y]}Часовой пояс изменён на $tz.${colors[x]}"
+    else
+        echo "${colors[r]}Не удалось сменить часовой пояс на $tz.${colors[x]}"
+    fi
+}
+
+show_time_status() {
+    timedatectl
+    echo
+    if command_exists chronyc; then
+        echo "${colors[y]}Источники синхронизации:${colors[x]}"
+        chronyc sources
+    else
+        echo "${colors[r]}Chrony не установлен.${colors[x]}"
+    fi
+}
+
+run_time_sync() {
+    if ! command_exists chronyc; then
+        echo "${colors[r]}Chrony не установлен. Сначала выполните пункт 1.${colors[x]}"
+        return
+    fi
+    chronyc -a makestep
+    sleep 2
+    if timedatectl show -p NTPSynchronized --value 2>/dev/null | grep -q yes; then
+        echo "${colors[g]}[OK] Время синхронизировано.${colors[x]}"
+    else
+        echo "${colors[r]}[FAIL] Время не синхронизировано.${colors[x]}"
     fi
 }
 
@@ -564,29 +591,19 @@ location_menu() {
         clear
         echo "${colors[g]}=== Настройка NTP ===${colors[x]}"
         echo
-        echo "1. Изменить часовой пояс"
+        echo "1. Установка Chrony"
         echo "2. Настроить Chrony"
-        echo "3. Показать время и часовой пояс"
-        echo "4. Проверить синхронизацию времени"
-        echo "5. Показать источники Chrony"
+        echo "3. Изменить часовой пояс"
+        echo "4. Время сервера, часовой пояс и источники синхронизации"
+        echo "5. Запустить синхронизацию времени"
         echo "0. Назад"
         read -r -p "${colors[y]}Выбор:${colors[x]} " c
         case "$c" in
-            1) setup_timezone; pause_menu ;;
+            1) install_chrony; pause_menu ;;
             2) setup_chrony; pause_menu ;;
-            3) timedatectl; pause_menu ;;
-            4)
-                if timedatectl show -p NTPSynchronized --value 2>/dev/null | grep -q yes; then
-                    echo "${colors[g]}[OK] Время синхронизировано.${colors[x]}"
-                else
-                    echo "${colors[r]}[FAIL] Время не синхронизировано.${colors[x]}"
-                fi
-                pause_menu
-                ;;
-            5)
-                if command_exists chronyc; then chronyc sources; else echo "${colors[r]}Chrony не установлен.${colors[x]}"; fi
-                pause_menu
-                ;;
+            3) setup_timezone; pause_menu ;;
+            4) show_time_status; pause_menu ;;
+            5) run_time_sync; pause_menu ;;
             0) return ;;
             *) echo "${colors[r]}Неверный выбор.${colors[x]}" ;;
         esac
