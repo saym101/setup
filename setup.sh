@@ -373,25 +373,7 @@ software_install_list() {
 setup_software() {
     echo "${colors[g]}Установка рекомендуемого набора ПО${colors[x]}"
     if confirm "${colors[y]}Установить рекомендуемый набор программ?${colors[x]}" "n"; then
-        software_install_list "рекомендуемый набор" "$standard_packages"
-    else
-        echo "${colors[r]}Установка отменена.${colors[x]}"
-    fi
-}
-
-setup_diagnostic_tools() {
-    echo "${colors[g]}Установка диагностических утилит${colors[x]}"
-    if confirm "${colors[y]}Установить диагностические утилиты?${colors[x]}" "n"; then
-        software_install_list "диагностические утилиты" "$optional_packages"
-    else
-        echo "${colors[r]}Установка отменена.${colors[x]}"
-    fi
-}
-
-setup_software_all() {
-    echo "${colors[g]}Установка полного набора (рекомендуемый + диагностика)${colors[x]}"
-    if confirm "${colors[y]}Установить оба набора программ?${colors[x]}" "n"; then
-        software_install_list "полный набор" "$standard_packages
+        software_install_list "рекомендуемый набор" "$standard_packages
 $optional_packages"
     else
         echo "${colors[r]}Установка отменена.${colors[x]}"
@@ -405,14 +387,10 @@ software_menu() {
         echo "${colors[g]}=== Установка ПО ===${colors[x]}"
         echo
         echo "1. Установить рекомендуемый набор (возможно изменить список вручную)"
-        echo "2. Установить диагностические утилиты (возможно изменить список вручную)"
-        echo "3. Установить всё (рекомендуемый + диагностика)"
         echo "0. Назад"
         read -r -p "${colors[y]}Выбор:${colors[x]} " c
         case "$c" in
             1) setup_software; pause_menu ;;
-            2) setup_diagnostic_tools; pause_menu ;;
-            3) setup_software_all; pause_menu ;;
             0) return ;;
             *) echo "${colors[r]}Неверный выбор.${colors[x]}" ;;
         esac
