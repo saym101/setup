@@ -685,10 +685,13 @@ setup_ssh_keys() {
 change_ssh_port() {
     echo "${colors[g]}Изменение порта SSH${colors[x]}"
     echo "Текущий настроенный порт: $ssh_port"
-    read -r -p "Введите новый порт (1-65535, Enter — случайный 1025-49150): " new_port_input
+    read -r -p "Введите новый порт (1-65535, 0 — случайный 1025-49150, Enter — отмена): " new_port_input
 
     local new_port
     if [ -z "$new_port_input" ]; then
+        echo "${colors[c]}Отменено, порт не изменён.${colors[x]}"
+        return 0
+    elif [ "$new_port_input" = "0" ]; then
         new_port=$(( RANDOM % 48126 + 1025 ))
     elif validate_port "$new_port_input"; then
         new_port="$new_port_input"
@@ -1364,11 +1367,23 @@ network_configure_gateway() {
 
 # --- DNS ---
 network_dns_apply() {
-    local dns_list="$1" iface ip cidr gw addr
+    local dns_list="$1" iface ip cidr gw addr cur_dns d
     if [ -z "$dns_list" ]; then
         echo "${colors[r]}ВНИМАНИЕ: список DNS пуст. После применения сервер останется без DNS-серверов.${colors[x]}"
         confirm_dangerous "Продолжить без DNS?" || { echo "${colors[c]}Отменено.${colors[x]}"; return 1; }
     fi
+    cur_dns=$(network_get_dns)
+    for d in $cur_dns; do
+        if [ "$d" = "127.0.0.1" ] || [ "$d" = "127.0.0.53" ]; then
+            if [[ " $dns_list " != *" $d "* ]]; then
+                echo "${colors[y]}ВНИМАНИЕ: сейчас DNS указывает на локальный резолвер ($d) — это обычно${colors[x]}"
+                echo "${colors[y]}означает, что на сервере работает свой кэширующий/рекурсивный DNS${colors[x]}"
+                echo "${colors[y]}(unbound/dnsmasq/bind и т.п.), а не забытый дефолт. Новый список его заменит.${colors[x]}"
+                confirm_dangerous "Всё равно заменить DNS на «$dns_list»?" || { echo "${colors[c]}Отменено.${colors[x]}"; return 1; }
+            fi
+            break
+        fi
+    done
     network_select_interface || return
     iface="$NET_SELECTED_IFACE"
     addr=$(network_get_interface_ipv4 "$iface")
