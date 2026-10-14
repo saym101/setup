@@ -900,6 +900,56 @@ network_confirm_or_rollback() {
 }
 
 # --- netplan ---
+# Netplan объединяет gateway4/routes из ВСЕХ yaml-файлов для одного
+# интерфейса, а не перекрывает их последним по алфавиту файлом. Если
+# облачный образ (cloud-init) уже прописал устаревший gateway4 для
+# интерфейса в своём 50-cloud-init.yaml, а наш оверрайд добавляет
+# современный "routes: - to: default via: ...", netplan видит это как два
+# отдельных дефолтных маршрута и падает с "Conflicting default route
+# declarations". Нейтрализуем gateway4 для этого интерфейса в ЧУЖИХ
+# netplan-файлах (не трогая свои собственные 9N-setup-sh-*.yaml) —
+# единственным источником дефолтного маршрута остаётся наш оверрайд.
+network_netplan_disable_foreign_gateway4() {
+    local iface="$1" f tmp
+    for f in /etc/netplan/*.yaml; do
+        [ -f "$f" ] || continue
+        case "$(basename "$f")" in
+            9[0-9]-setup-sh-*) continue ;;
+        esac
+        grep -qE "^[[:space:]]*${iface}:[[:space:]]*$" "$f" || continue
+        grep -qE "^[[:space:]]*gateway4:" "$f" || continue
+        backup_file "$f" >/dev/null
+        tmp=$(mktemp)
+        awk -v iface="${iface}:" '
+            BEGIN { in_iface = 0; iface_indent = -1 }
+            {
+                line = $0
+                n = match(line, /[^ \t]/)
+                indent = (n > 0) ? n - 1 : -1
+                key_line = line
+                sub(/^[ \t]*/, "", key_line)
+
+                if (key_line == iface) {
+                    in_iface = 1
+                    iface_indent = indent
+                    print line
+                    next
+                }
+                if (in_iface && key_line != "" && indent <= iface_indent) {
+                    in_iface = 0
+                }
+                if (in_iface && key_line ~ /^gateway4:/) {
+                    prefix = substr(line, 1, indent)
+                    print prefix "# gateway4 отключён setup.sh — конфликтует с routes:default в 9N-setup-sh-*.yaml"
+                    next
+                }
+                print line
+            }
+        ' "$f" > "$tmp" && mv "$tmp" "$f" && chmod 600 "$f"
+        echo "${colors[y]}В $f отключён gateway4 для $iface (конфликтовал с нашим оверрайдом).${colors[x]}"
+    done
+}
+
 network_netplan_write_override() {
     local iface="$1" mode="$2" ip="$3" cidr="$4" gw="$5" dns="$6"
     local file="/etc/netplan/90-setup-sh-${iface}.yaml"
@@ -937,6 +987,7 @@ network_apply_netplan() {
     backup_dir="$BACKUP_DIR/netplan_$(date +%Y%m%d_%H%M%S)"
     mkdir -p "$backup_dir"
     cp -p /etc/netplan/*.yaml "$backup_dir/" 2>/dev/null
+    [ "$mode" != "dhcp" ] && [ -n "$gw" ] && network_netplan_disable_foreign_gateway4 "$iface"
     file=$(network_netplan_write_override "$iface" "$mode" "$ip" "$cidr" "$gw" "$dns")
     errfile=$(mktemp)
     trap 'rm -f "$errfile"' RETURN
