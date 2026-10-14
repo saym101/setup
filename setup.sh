@@ -531,7 +531,7 @@ setup_timezone() {
     local current_timezone
     current_timezone=$(timedatectl show -p Timezone --value 2>/dev/null)
     [ -z "$current_timezone" ] && current_timezone="Не определён"
-    echo "${colors[g]}Текущий часовой пояс: $current_timezone${colors[x]}"
+    echo "${colors[g]}Текущий часовой пояс: $current_timezone (UTC$(date +%:z))${colors[x]}"
     echo "Введите смещение от UTC числом: -12 ... -1, 0, +1 ... +14"
     echo "Примеры: +3 (Москва), +7 (Новосибирск), -4 (восточное побережье США летом), 0 (UTC)"
     local offset n tz
@@ -555,7 +555,7 @@ setup_timezone() {
         echo "${colors[r]}Некорректный ввод. Допустимо от -12 до +14.${colors[x]}"
     done
     if timedatectl set-timezone "$tz"; then
-        echo "${colors[y]}Часовой пояс изменён на $tz.${colors[x]}"
+        echo "${colors[y]}Часовой пояс изменён на $tz (UTC$(date +%:z)).${colors[x]}"
     else
         echo "${colors[r]}Не удалось сменить часовой пояс на $tz.${colors[x]}"
     fi
@@ -578,12 +578,21 @@ run_time_sync() {
         return
     fi
     chronyc -a makestep
-    sleep 2
-    if timedatectl show -p NTPSynchronized --value 2>/dev/null | grep -q yes; then
-        echo "${colors[g]}[OK] Время синхронизировано.${colors[x]}"
-    else
-        echo "${colors[r]}[FAIL] Время не синхронизировано.${colors[x]}"
-    fi
+    # chrony выбирает источник не мгновенно — ждём до 20 с
+    local i
+    for i in $(seq 1 10); do
+        if chronyc tracking 2>/dev/null | grep -q '^Leap status *: *Normal'; then
+            echo "${colors[g]}[OK] Время синхронизировано.${colors[x]}"
+            echo
+            timedatectl
+            return
+        fi
+        sleep 2
+    done
+    echo "${colors[r]}[FAIL] Время не синхронизировано.${colors[x]}"
+    echo "Проверьте источники (пункт 4) и доступность NTP-серверов (UDP 123)."
+    echo
+    timedatectl
 }
 
 location_menu() {
