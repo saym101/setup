@@ -2185,13 +2185,15 @@ ufw_select_protocol() {
     echo "2. UDP" >&2
     echo "3. TCP + UDP" >&2
     local p
-    read -r -p "Протокол: " p
-    case "$p" in
-        1) echo "tcp" ;;
-        2) echo "udp" ;;
-        3) echo "tcp+udp" ;;
-        *) echo "tcp" ;;
-    esac
+    while true; do
+        read -r -p "Протокол: " p
+        case "$p" in
+            1) echo "tcp"; return ;;
+            2) echo "udp"; return ;;
+            3) echo "tcp+udp"; return ;;
+            *) echo "${colors[r]}Неверный выбор. Введите 1, 2 или 3.${colors[x]}" >&2 ;;
+        esac
+    done
 }
 
 # --- Управление службой UFW ---
