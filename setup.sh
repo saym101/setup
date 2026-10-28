@@ -131,11 +131,11 @@ confirm() {
         if [[ -z "$answer" ]]; then
             answer="${default,,}"
         fi
-        if [[ "$answer" =~ ^(y|n)$ ]]; then
-            break
-        else
-            echo "${colors[r]}Неверный ввод. Пожалуйста, введите 'y' или 'n'.${colors[x]}"
-        fi
+        case "$answer" in
+            y|д) answer="y"; break ;;
+            n|н) answer="n"; break ;;
+            *) echo "${colors[r]}Неверный ввод. Введите 'y'/'д' или 'n'/'н'.${colors[x]}" ;;
+        esac
     done
     [[ "$answer" == "y" ]]
 }
@@ -144,8 +144,8 @@ confirm_dangerous() {
     local msg="$1"
     local answer
     echo "${colors[r]}${msg}${colors[x]}"
-    read -r -p "Введите YES для продолжения: " answer
-    [ "$answer" = "YES" ]
+    read -r -p "Введите YES (или ДА) для продолжения: " answer
+    [ "$answer" = "YES" ] || [ "$answer" = "ДА" ]
 }
 
 pause_menu() {
@@ -1826,12 +1826,12 @@ network_fix_dhcp_clientid() {
         echo "${colors[y]}роутеру сейчас не передаётся. Если нужно нормализовать client-id —${colors[x]}"
         echo "${colors[y]}сначала верните DHCP (пункт 3), примените, и уже потом снова статику.${colors[x]}"
         confirm "Всё равно записать настройку (пригодится при следующем включении DHCP)?" "n" || return 0
+    else
+        echo "На cloud-init/Proxmox-образах DHCP client-id по умолчанию — это DUID"
+        echo "(длинная hex-строка), а не MAC-адрес интерфейса. Роутер/DHCP-сервер"
+        echo "видит именно client-id, а не аппаратный MAC."
+        confirm_dangerous "Настроить $iface на отправку обычного MAC как DHCP client-id?" || return
     fi
-
-    echo "На cloud-init/Proxmox-образах DHCP client-id по умолчанию — это DUID"
-    echo "(длинная hex-строка), а не MAC-адрес интерфейса. Роутер/DHCP-сервер"
-    echo "видит именно client-id, а не аппаратный MAC."
-    confirm_dangerous "Настроить $iface на отправку обычного MAC как DHCP client-id?" || return
 
     network_detect_backend
     case "$NET_BACKEND" in
