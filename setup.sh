@@ -2370,6 +2370,7 @@ ufw_ports_menu() {
         echo "2. Запретить порт"
         echo "3. Разрешить диапазон"
         echo "4. Запретить диапазон"
+        echo "5. Удалить правило"
         echo "0. Назад"
         read -r -p "Выбор: " c
         case "$c" in
@@ -2427,6 +2428,7 @@ ufw_ports_menu() {
                     ufw_deny_port_range "$range" "$proto"
                 fi
                 ;;
+            5) ufw_delete_rule ;;
             0) return ;;
             *) echo "${colors[r]}Неверный выбор.${colors[x]}" ;;
         esac
@@ -2464,6 +2466,7 @@ ufw_ip_menu() {
         echo "6. Заблокировать IP -> порт"
         echo "7. Разрешить подсеть -> порт"
         echo "8. Заблокировать подсеть -> порт"
+        echo "9. Удалить правило"
         echo "0. Назад"
         read -r -p "Выбор: " c
         case "$c" in
@@ -2499,6 +2502,7 @@ ufw_ip_menu() {
                 read -r -p "Подсеть (CIDR): " sn; read -r -p "Порт: " port; proto=$(ufw_select_protocol)
                 validate_cidr "$sn" && validate_port "$port" && ufw_subnet_to_port deny "$sn" "$port" "$proto" || echo "${colors[r]}Некорректные данные.${colors[x]}"
                 ;;
+            9) ufw_delete_rule ;;
             0) return ;;
             *) echo "${colors[r]}Неверный выбор.${colors[x]}" ;;
         esac
@@ -3033,16 +3037,15 @@ ufw_menu() {
         echo "2.  Показать правила"
         echo "3.  Правила портов"
         echo "4.  Правила IP / подсетей"
-        echo "5.  Удалить правило"
-        echo "6.  Правила интерфейсов"
-        echo "7.  Исходящий трафик"
-        echo "8.  Routed / Forward"
-        echo "9.  Защита SSH"
-        echo "10. Профили приложений"
-        echo "11. Логирование"
-        echo "12. Политики по умолчанию"
-        echo "13. Расширенный конструктор правила"
-        echo "14. Резервная копия / восстановление"
+        echo "5.  Правила интерфейсов"
+        echo "6.  Исходящий трафик"
+        echo "7.  Routed / Forward"
+        echo "8.  Защита SSH"
+        echo "9.  Профили приложений"
+        echo "10. Логирование"
+        echo "11. Политики по умолчанию"
+        echo "12. Расширенный конструктор правила"
+        echo "13. Резервная копия / восстановление"
         echo "0.  Назад"
         read -r -p "${colors[y]}Выбор:${colors[x]} " c
         case "$c" in
@@ -3050,16 +3053,15 @@ ufw_menu() {
             2) ufw_show_verbose_status; pause_menu ;;
             3) ufw_ports_menu ;;
             4) ufw_ip_menu ;;
-            5) ufw_delete_rule ;;
-            6) ufw_interface_menu ;;
-            7) ufw_outgoing_menu ;;
-            8) ufw_routed_menu ;;
-            9) ufw_ssh_menu ;;
-            10) ufw_app_menu ;;
-            11) ufw_logging_menu ;;
-            12) ufw_set_default_policies; pause_menu ;;
-            13) ufw_rule_builder; pause_menu ;;
-            14) ufw_backup_menu ;;
+            5) ufw_interface_menu ;;
+            6) ufw_outgoing_menu ;;
+            7) ufw_routed_menu ;;
+            8) ufw_ssh_menu ;;
+            9) ufw_app_menu ;;
+            10) ufw_logging_menu ;;
+            11) ufw_set_default_policies; pause_menu ;;
+            12) ufw_rule_builder; pause_menu ;;
+            13) ufw_backup_menu ;;
             0) return ;;
             *) echo "${colors[r]}Неверный выбор.${colors[x]}" ;;
         esac
