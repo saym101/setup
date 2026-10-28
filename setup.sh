@@ -2970,10 +2970,20 @@ ufw_listening_ports() {
         ss -tlnp 2>/dev/null | tail -n +2 | awk '{print "tcp", $4, $NF}'
         ss -ulnp 2>/dev/null | tail -n +2 | awk '{print "udp", $4, $NF}'
     } | while read -r proto addr proc; do
-        local port
+        local port host scope
         port="${addr##*:}"
+        host="${addr%:*}"
+        # 0.0.0.0/[::] — слушает на всех интерфейсах, реально доступно снаружи
+        # (если не блокирует UFW). 127.0.0.1/[::1] — только с этой же машины,
+        # например SSH-туннель/port-forward: такое не нужно "закрывать", оно
+        # и так снаружи не видно. Конкретный IP — привязано только к нему.
+        case "$host" in
+            0.0.0.0|"[::]") scope="" ;;
+            127.0.0.1|"[::1]") scope="localhost" ;;
+            *) scope="$host" ;;
+        esac
         proc=$(echo "$proc" | sed -n 's/.*(("\([^"]*\)".*/\1/p')
-        printf "%s/%s\t%s\n" "$proto" "$port" "${proc:-?}"
+        printf "%s/%s\t%s\t%s\n" "$proto" "$port" "${proc:-?}" "$scope"
     done | sort -t/ -k2,2n -u
 }
 
@@ -3012,8 +3022,12 @@ ufw_show_summary() {
     local ports_info
     ports_info=$(ufw_listening_ports)
     if [ -n "$ports_info" ]; then
-        echo "$ports_info" | while IFS=$'\t' read -r portproto proc; do
-            printf "${colors[p]} %-10s${colors[x]}%s\n" "$portproto" "$proc"
+        echo "$ports_info" | while IFS=$'\t' read -r portproto proc scope; do
+            case "$scope" in
+                "") printf "${colors[p]} %-10s${colors[x]}%s\n" "$portproto" "$proc" ;;
+                localhost) printf "${colors[c]} %-10s${colors[x]}%-18s${colors[c]}(только localhost, снаружи недоступен)${colors[x]}\n" "$portproto" "$proc" ;;
+                *) printf "${colors[p]} %-10s${colors[x]}%-18s${colors[c]}(только $scope)${colors[x]}\n" "$portproto" "$proc" ;;
+            esac
         done
     else
         echo "  —"
