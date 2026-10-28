@@ -2952,6 +2952,25 @@ ufw_backup_menu() {
 }
 
 # --- Сводка состояния и главное меню UFW ---
+# Реально слушающие TCP/UDP порты — не зависит от состояния/правил UFW.
+# Нужно для случая "зашли настраивать UFW на уже работающем сервере"
+# (например, FastPanel с его 80/443/FTP) — правила UFW тут ни при чём,
+# порт слушается и доступен снаружи независимо от того, что скажет UFW,
+# пока сам UFW не включён (или включён, но правила это явно не разрешают
+# и не запрещают — связи между списком правил и реальным listen нет).
+ufw_listening_ports() {
+    command_exists ss || return 0
+    {
+        ss -tlnp 2>/dev/null | tail -n +2 | awk '{print "tcp", $4, $NF}'
+        ss -ulnp 2>/dev/null | tail -n +2 | awk '{print "udp", $4, $NF}'
+    } | while read -r proto addr proc; do
+        local port
+        port="${addr##*:}"
+        proc=$(echo "$proc" | sed -n 's/.*(("\([^"]*\)".*/\1/p')
+        printf "%s/%s\t%s\n" "$proto" "$port" "${proc:-?}"
+    done | sort -t/ -k2,2n -u
+}
+
 ufw_show_summary() {
     local installed="нет" status="—" ipv6="—" logging="—" default_in default_out default_routed rules_count=0
     if ufw_is_installed; then
@@ -2982,6 +3001,17 @@ ufw_show_summary() {
     [ -n "$ssh_client_ip" ] && printf "%-18s%s\n" "SSH client:" "$ssh_client_ip"
     echo
     printf "%-18s%s\n" "Rules:" "$rules_count"
+    echo
+    echo "${colors[p]}${colors[b]}Реально слушающие порты (не зависит от правил UFW):${colors[x]}"
+    local ports_info
+    ports_info=$(ufw_listening_ports)
+    if [ -n "$ports_info" ]; then
+        echo "$ports_info" | while IFS=$'\t' read -r portproto proc; do
+            printf "${colors[p]} %-10s${colors[x]}%s\n" "$portproto" "$proc"
+        done
+    else
+        echo "  —"
+    fi
 }
 
 ufw_menu() {
