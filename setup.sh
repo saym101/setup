@@ -580,11 +580,37 @@ setup_timezone() {
     fi
 }
 
+# -p печатает конфигурацию с include/confdir и завершает chronyd без запуска.
+show_chrony_configured_sources() {
+    local config="/etc/chrony/chrony.conf" parsed sources
+    echo "${colors[y]}NTP-серверы и пулы в конфигурации ($config и подключённые файлы):${colors[x]}"
+    if [ ! -f "$config" ]; then
+        echo "${colors[r]}Файл конфигурации не найден.${colors[x]}"
+        return
+    fi
+    if ! command_exists chronyd; then
+        echo "${colors[r]}Команда chronyd не найдена, прочитать итоговую конфигурацию не удалось.${colors[x]}"
+        return
+    fi
+    if ! parsed=$(chronyd -p -f "$config" 2>/dev/null); then
+        echo "${colors[r]}Не удалось разобрать конфигурацию Chrony. Проверьте: chronyd -p -f $config${colors[x]}"
+        return
+    fi
+    sources=$(printf '%s\n' "$parsed" | awk 'tolower($1) ~ /^(server|pool|peer|sourcedir)$/')
+    if [ -n "$sources" ]; then
+        printf '%s\n' "$sources"
+    else
+        echo "Директивы server/pool/peer/sourcedir не найдены."
+    fi
+}
+
 show_time_status() {
     timedatectl
     echo
     if command_exists chronyc; then
-        echo "${colors[y]}Источники синхронизации:${colors[x]}"
+        show_chrony_configured_sources
+        echo
+        echo "${colors[y]}Текущие источники синхронизации (chronyc sources):${colors[x]}"
         chronyc sources
     else
         echo "${colors[r]}Chrony не установлен.${colors[x]}"

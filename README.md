@@ -27,7 +27,7 @@ A full network-configuration submenu that never assumes `eth0` and never guesses
 * **Safety net:** Netplan changes apply via `netplan try` (automatic rollback if not confirmed within 120s); other backends get a manual confirm-or-revert-from-backup window. Any change to IP/gateway/interface state made over an active SSH session shows an explicit warning before it's applied.
 
 ### 🌍 NTP
-Timezone and `chrony` (NTP) configuration grouped in one submenu, plus a time-sync status check and a quick view of current Chrony sources.
+Timezone and `chrony` (NTP) configuration share one submenu. Item 4 shows the time, timezone, configured `server`/`pool`/`peer` directives with options (`chronyd -p`, expanding `include`/`confdir`), `sourcedir` directories, and a separate list of current `chronyc sources`.
 
 ### 🔒 Hardened SSH
 * Generate RSA key pairs, convert to PPK (PuTTY), disable password auth and root password login.
