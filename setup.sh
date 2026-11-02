@@ -498,27 +498,22 @@ setup_chrony() {
         echo "${colors[r]}Chrony не установлен. Сначала выполните пункт 1.${colors[x]}"
         return
     fi
-    if ! systemctl is-active --quiet chrony; then
-        systemctl start chrony
-        sleep 2
-        if ! systemctl is-active --quiet chrony; then
-            echo "${colors[r]}Не удалось запустить службу chrony.${colors[x]}"
-            return
-        fi
-    fi
-    local backup_file
-    backup_file="/etc/chrony/chrony.conf.bak_$(date +%Y%m%d_%H%M%S)"
-    cp /etc/chrony/chrony.conf "$backup_file"
     local default_servers input_servers
     default_servers=$(echo "$chrony_servers" | tr '\n' '|' | sed 's/|$//')
     while true; do
-        echo -e "${colors[y]}Можете удалить весь список или любые два три сервера и вписать свой. Или оставить как есть. Enter с пустой строкой — отмена."
-        read -r -e -i "$default_servers" -p "${colors[r]}Ваш выбор: ${colors[g]}" input_servers
+        echo "${colors[c]}Предлагаемый список: $default_servers${colors[x]}"
+        echo "Введите новый список; 1 — применить предложенный; 0 или Enter — отмена."
+        if ! read -r -e -p "${colors[y]}NTP-серверы: ${colors[x]}" input_servers; then
+            echo
+            echo "${colors[c]}Изменение NTP-серверов отменено.${colors[x]}"
+            return 0
+        fi
         echo -n "${colors[x]}"
-        if [ -z "$input_servers" ]; then
+        if [[ "$input_servers" = "0" || -z "${input_servers//[[:space:]]/}" ]]; then
             echo "${colors[r]}Изменение NTP-серверов отменено.${colors[x]}"
             return
         fi
+        [ "$input_servers" != "1" ] || input_servers="$default_servers"
         if [[ "$input_servers" =~ ^[a-zA-Z0-9\ .\|\-]+$ ]]; then
             break
         fi
@@ -527,6 +522,17 @@ setup_chrony() {
     local new_servers
     new_servers=$(echo "$input_servers" | tr '|' '\n' | tr ' ' '\n' | grep -v '^$')
     if [ -n "$new_servers" ]; then
+        if ! systemctl is-active --quiet chrony; then
+            systemctl start chrony
+            sleep 2
+            if ! systemctl is-active --quiet chrony; then
+                echo "${colors[r]}Не удалось запустить службу chrony.${colors[x]}"
+                return
+            fi
+        fi
+        local backup_file
+        backup_file="/etc/chrony/chrony.conf.bak_$(date +%Y%m%d_%H%M%S)"
+        cp /etc/chrony/chrony.conf "$backup_file"
         local temp_conf
         temp_conf=$(mktemp)
         grep -v "^pool" /etc/chrony/chrony.conf > "$temp_conf"
