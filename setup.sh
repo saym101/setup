@@ -682,12 +682,43 @@ setup_ssh_keys() {
     fi
 }
 
+# Socket activation требует пересоздать слушатель, а не только reload sshd.
+ssh_apply_listener() {
+    local socket_active="$1"
+    if [ "$socket_active" -eq 1 ]; then
+        systemctl daemon-reload &&
+            systemctl stop ssh.service &&
+            systemctl restart ssh.socket &&
+            systemctl start ssh.service
+    else
+        systemctl reload ssh.service 2>/dev/null || systemctl restart ssh.service
+    fi
+}
+
+ssh_wait_for_port() {
+    local port="$1" attempt
+    for ((attempt = 0; attempt < 5; attempt++)); do
+        if ss -H -lntp 2>/dev/null | awk -v port="$port" '
+            {
+                addr = $4
+                sub(/^.*:/, "", addr)
+                if (addr == port && $0 ~ /"sshd(-session)?"/) found = 1
+            }
+            END {exit !found}
+        '; then
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+
 change_ssh_port() {
     echo "${colors[g]}Изменение порта SSH${colors[x]}"
     echo "Текущий настроенный порт: $ssh_port"
     read -r -p "Введите новый порт (1-65535, 0 — случайный 1025-49150, Enter — отмена): " new_port_input
 
-    local new_port
+    local new_port socket_active=0 old_port effective_ports
     if [ -z "$new_port_input" ]; then
         echo "${colors[c]}Отменено, порт не изменён.${colors[x]}"
         return 0
@@ -705,6 +736,18 @@ change_ssh_port() {
         confirm "Всё равно продолжить?" "n" || return 1
     fi
 
+    command_exists ss || { echo "${colors[r]}Для проверки SSH-порта необходим ss (iproute2).${colors[x]}"; return 1; }
+    old_port=$(get_ssh_configured_port)
+    if systemctl is-active --quiet ssh.socket; then
+        socket_active=1
+        # Остановка главного sshd не должна завершить текущие SSH-сессии.
+        if [ "$(systemctl show ssh.service -p KillMode --value)" != "process" ]; then
+            echo "${colors[r]}Нестандартный KillMode у ssh.service: безопасная смена сокета из SSH-сессии не гарантирована.${colors[x]}"
+            return 1
+        fi
+        echo "${colors[c]}Обнаружен ssh.socket — обновляем сокет и службу SSH.${colors[x]}"
+    fi
+
     local backup
     backup=$(backup_file "$sshconfigfile")
     if [ -z "$backup" ]; then
@@ -720,12 +763,20 @@ change_ssh_port() {
 
     local errfile
     errfile=$(mktemp)
-    trap 'rm -f "$errfile"' RETURN
     if ! sshd -t 2>"$errfile"; then
         echo "${colors[r]}Ошибка в конфигурации sshd:${colors[x]}"
         cat "$errfile"
+        rm -f "$errfile"
         restore_file "$sshconfigfile" "$backup"
         echo "${colors[y]}Конфигурация восстановлена из резервной копии.${colors[x]}"
+        return 1
+    fi
+
+    effective_ports=$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2}' | sort -nu)
+    if [ "$effective_ports" != "$new_port" ]; then
+        echo "${colors[r]}Итоговые порты sshd: $effective_ports. Проверьте Port в Include-файлах; изменение отменено.${colors[x]}"
+        restore_file "$sshconfigfile" "$backup"
+        rm -f "$errfile"
         return 1
     fi
 
@@ -740,22 +791,27 @@ change_ssh_port() {
         fi
     fi
 
-    if systemctl reload ssh 2>/dev/null || systemctl restart ssh; then
-        if systemctl is-active --quiet ssh; then
-            ssh_port="$new_port"
-            echo "${colors[g]}Порт SSH успешно изменён на $ssh_port.${colors[x]}"
-        else
-            echo "${colors[r]}Служба SSH не активна после перезапуска.${colors[x]}"
-            restore_file "$sshconfigfile" "$backup"
-            systemctl restart ssh
-            return 1
-        fi
-    else
-        echo "${colors[r]}Ошибка перезапуска SSH. Восстанавливаем конфигурацию.${colors[x]}"
-        restore_file "$sshconfigfile" "$backup"
-        systemctl restart ssh
-        return 1
+    if ssh_apply_listener "$socket_active" &&
+        systemctl is-active --quiet ssh.service &&
+        ssh_wait_for_port "$new_port"; then
+        ssh_port="$new_port"
+        rm -f "$errfile"
+        echo "${colors[g]}SSH слушает TCP/$ssh_port.${colors[x]}"
+        echo "${colors[y]}Проверьте новое SSH-подключение, прежде чем закрывать текущую сессию. Внешний файрвол проверяется отдельно.${colors[x]}"
+        return 0
     fi
+
+    echo "${colors[r]}Новый SSH-порт не применён. Восстанавливаем конфигурацию из $backup.${colors[x]}"
+    if restore_file "$sshconfigfile" "$backup" &&
+        ssh_apply_listener "$socket_active" &&
+        ssh_wait_for_port "$old_port"; then
+        ssh_port="$old_port"
+        echo "${colors[y]}Конфигурация восстановлена, SSH слушает TCP/$old_port.${colors[x]}"
+    else
+        echo "${colors[r]}Не удалось подтвердить восстановление SSH. Не закрывайте текущую сессию; проверьте службу через консоль.${colors[x]}"
+    fi
+    rm -f "$errfile"
+    return 1
 }
 
 # =========================================================

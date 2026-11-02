@@ -28,6 +28,8 @@ Timezone and `chrony` (NTP) configuration grouped in one submenu, plus a time-sy
 ### 🔒 Hardened SSH
 * Generate RSA key pairs, convert to PPK (PuTTY), disable password auth and root password login.
 * **SSH port change** goes through a full safety pipeline: validates the new port, checks nothing else is already listening on it, backs up `sshd_config`, test-loads the new config with `sshd -T`, only restarts SSH if that test passes, and automatically restores the backup on any failure. If UFW is active, it offers to open the new port before the change takes effect.
+* When `ssh.socket` is active, the script runs `daemon-reload` and recreates the socket and service; standalone `ssh.service` mode is preserved. Success requires an actual SSH listener verified with `ss`; on failure the script attempts configuration rollback and checks the restored port. Verify external access in a separate SSH session; provider firewall rules are not checked automatically.
+* Run isolated regression checks without touching real services: `bash tests/ssh-port.sh setup.sh`.
 * The script tracks the **configured** SSH port separately from the port your **current session** is actually using, and warns whenever they diverge (e.g. right after a port change) — so a stale session doesn't trick you into locking yourself out.
 
 ### 🧱 UFW (Firewall)
