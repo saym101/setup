@@ -91,6 +91,11 @@ running_via_ssh=0
 # Сетевые runtime-переменные (используются функциями раздела 05)
 NET_BACKEND=""
 NET_BACKEND_FILE=""
+NET_BACKEND_REASON=""
+NET_BACKEND_WARNING=""
+NET_CONFIG_ID=""
+NET_RENDERER=""
+NET_NM_UUID=""
 NET_SELECTED_IFACE=""
 NET_IFACES=()
 NET_REVERT_BACKUP_FILE=""
@@ -245,6 +250,20 @@ restore_file() {
 # =========================================================
 # 03. ОПРЕДЕЛЕНИЕ СОСТОЯНИЯ SSH
 # =========================================================
+detect_system() {
+    local ID="" VERSION_ID="" PRETTY_NAME=""
+    if [ -r /etc/os-release ]; then
+        . /etc/os-release
+    fi
+    SYSTEM_NAME="${PRETTY_NAME:-не определена}"
+    SYSTEM_SUPPORTED=0
+    case "$ID:$VERSION_ID" in
+        debian:12|debian:13|ubuntu:22.04|ubuntu:24.04|ubuntu:25.04|ubuntu:25.10|ubuntu:26.04)
+            SYSTEM_SUPPORTED=1 ;;
+    esac
+}
+
+
 get_ssh_configured_port() {
     local port
     port=$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2; exit}')
@@ -814,6 +833,8 @@ change_ssh_port() {
     return 1
 }
 
+
+
 # =========================================================
 # 07. НАСТРОЙКА СЕТИ
 # =========================================================
@@ -913,6 +934,10 @@ network_show_status() {
 }
 
 network_show_full_config() {
+    local iface
+    iface=$(network_get_default_interface)
+    [ -z "$iface" ] || network_show_backend "$iface" || :
+    echo
     echo "${colors[g]}=== ip addr ===${colors[x]}"
     ip addr show
     echo
@@ -923,31 +948,231 @@ network_show_full_config() {
     network_get_dns
 }
 
+
 # --- Определение сетевого backend ---
+network_interfaces_walk() {
+    local file="$1" directive patterns pattern path child
+    [ -f "$file" ] || return 0
+    file=$(readlink -f "$file") || return 0
+    [ -z "${NET_IF_SEEN[$file]:-}" ] || return 0
+    NET_IF_SEEN["$file"]=1
+    printf '%s\n' "$file"
+    while read -r directive patterns; do
+        for pattern in $patterns; do
+            [[ "$pattern" = /* ]] || pattern="$(dirname "$file")/$pattern"
+            while IFS= read -r path; do
+                if [ "$directive" = "source-directory" ]; then
+                    for child in "$path"/*; do
+                        [[ "${child##*/}" =~ ^[a-zA-Z0-9_-]+$ ]] || continue
+                        network_interfaces_walk "$child"
+                    done
+                else
+                    network_interfaces_walk "$path"
+                fi
+            done < <(compgen -G "$pattern")
+        done
+    done < <(awk '$1 == "source" || $1 == "source-directory" {
+        directive=$1; $1=""; sub(/^[ \t]+/, ""); print directive, $0
+    }' "$file")
+}
+
+network_interfaces_sources() (
+    local iface="$1" file
+    declare -A NET_IF_SEEN=()
+    while IFS= read -r file; do
+        awk -v iface="$iface" '$1 == "iface" && $2 == iface && $3 == "inet" {found=1}
+            END {exit !found}' "$file" && printf '%s\n' "$file"
+    done < <(network_interfaces_walk /etc/network/interfaces)
+)
+
+# ID из применённого .network/профиля может отличаться от имени интерфейса.
+network_netplan_sources() {
+    command_exists python3 || return 1
+    python3 - "$1" "$2" <<'NETPLAN_SOURCES_PY'
+import pathlib
+import sys
+try:
+    import yaml
+    selected = {}
+    for folder in ("/lib/netplan", "/etc/netplan", "/run/netplan"):
+        for path in sorted(pathlib.Path(folder).glob("*.yaml")):
+            selected[path.name] = path
+    sources = []
+    match = {}
+    for name, path in sorted(selected.items()):
+        data = yaml.safe_load(path.read_text()) or {}
+        if sys.argv[1] in data.get("network", {}).get("ethernets", {}):
+            if path.parent != pathlib.Path("/etc/netplan"):
+                sys.exit(1)
+            match.update(data["network"]["ethernets"][sys.argv[1]].get("match", {}))
+            sources.append(str(path))
+    if not sources:
+        sys.exit(1)
+    if match:
+        if "macaddress" not in match and match.get("name") != sys.argv[2]:
+            sys.exit(1)
+    elif sys.argv[1] != sys.argv[2]:
+        sys.exit(1)
+    print("\n".join(sources))
+except ImportError:
+    sys.exit(1)
+except Exception:
+    sys.exit(1)
+NETPLAN_SOURCES_PY
+}
+
+
 network_detect_backend() {
-    if command_exists netplan && compgen -G "/etc/netplan/*.yaml" >/dev/null 2>&1; then
-        NET_BACKEND="netplan"
-        NET_BACKEND_FILE=$(find /etc/netplan -maxdepth 1 -name '*.yaml' 2>/dev/null | sort | tail -n1)
-    elif systemctl is-active --quiet NetworkManager 2>/dev/null; then
+    local iface="${1:-${NET_SELECTED_IFACE:-}}" status file uuid="" nm_file="" state=""
+    local eni_files="" eni_active=0 nd_file="" owners=0 profiles=0
+    NET_BACKEND="unknown"
+    NET_BACKEND_FILE=""
+    NET_BACKEND_REASON=""
+    NET_BACKEND_WARNING=""
+    NET_CONFIG_ID=""
+    NET_RENDERER=""
+    NET_NM_UUID=""
+    [ -n "$iface" ] || { NET_BACKEND_REASON="Сначала выберите интерфейс."; return 1; }
+
+    if command_exists ifquery; then
+        eni_files=$(network_interfaces_sources "$iface")
+        if [ -n "$eni_files" ] && ifquery "$iface" >/dev/null 2>&1 &&
+            awk -F= -v iface="$iface" '$1 == iface {found=1} END {exit !found}' /run/network/ifstate 2>/dev/null; then
+            eni_active=1
+        fi
+    fi
+
+    if command_exists networkctl && systemctl is-active --quiet systemd-networkd 2>/dev/null; then
+        status=$(LC_ALL=C SYSTEMD_COLORS=0 networkctl status "$iface" --no-pager 2>/dev/null)
+        if [[ "$status" != *"(unmanaged)"* ]]; then
+            nd_file=$(printf '%s\n' "$status" | sed -n 's/^[[:space:]]*Network File:[[:space:]]*//p' | head -n1)
+            [[ "$nd_file" = /*.network ]] || nd_file=""
+        fi
+    fi
+
+    if command_exists nmcli && systemctl is-active --quiet NetworkManager 2>/dev/null; then
+        uuid=$(LC_ALL=C nmcli -g GENERAL.CON-UUID device show "$iface" 2>/dev/null)
+        state=$(LC_ALL=C nmcli -g GENERAL.STATE device show "$iface" 2>/dev/null)
+        [[ "$uuid" =~ ^[0-9a-fA-F-]{36}$ && "$state" != *externally* ]] || uuid=""
+    fi
+    [ -z "$nd_file" ] || ((owners+=1))
+    [ -z "$uuid" ] || ((owners+=1))
+    [ "$eni_active" -eq 0 ] || ((owners+=1))
+    if [ "$owners" -gt 1 ]; then
+        NET_BACKEND="conflict"
+        NET_BACKEND_REASON="У $iface несколько владельцев: networkd=${nd_file:-нет}; NetworkManager=${uuid:-нет}; ifupdown=${eni_files:-нет}. Изменение отменено."
+        return 1
+    fi
+
+    if [ -n "$uuid" ]; then
+        NET_NM_UUID="$uuid"
+        for file in /run/NetworkManager/system-connections/*.nmconnection /etc/NetworkManager/system-connections/*.nmconnection; do
+            [ -f "$file" ] || continue
+            if awk -F= -v uuid="$uuid" '$1 == "uuid" && $2 == uuid {found=1} END {exit !found}' "$file"; then
+                nm_file="$file"
+                ((profiles+=1))
+            fi
+        done
+        if [ "$profiles" -ne 1 ]; then
+            NET_BACKEND_REASON="Для активного UUID $uuid найдено файлов профиля: $profiles. Источник настроек NetworkManager неоднозначен."
+            return 1
+        fi
         NET_BACKEND="networkmanager"
-        NET_BACKEND_FILE="nmcli"
-    elif systemctl is-active --quiet systemd-networkd 2>/dev/null; then
+        NET_BACKEND_FILE="${nm_file:-UUID $uuid (nmcli)}"
+        if [[ "${nm_file##*/}" = netplan-*.nmconnection ]]; then
+            NET_CONFIG_ID="${nm_file##*/}"
+            NET_CONFIG_ID="${NET_CONFIG_ID#netplan-}"
+            NET_CONFIG_ID="${NET_CONFIG_ID%.nmconnection}"
+            NET_RENDERER="NetworkManager"
+        fi
+    elif [ -n "$nd_file" ]; then
         NET_BACKEND="networkd"
-        NET_BACKEND_FILE="/etc/systemd/network"
-    elif [ -f /etc/network/interfaces ]; then
+        NET_BACKEND_FILE="$nd_file"
+        if [[ "${nd_file##*/}" = 10-netplan-*.network ]]; then
+            NET_CONFIG_ID="${nd_file##*/}"
+            NET_CONFIG_ID="${NET_CONFIG_ID#10-netplan-}"
+            NET_CONFIG_ID="${NET_CONFIG_ID%.network}"
+            NET_RENDERER="networkd"
+        fi
+    elif [ -n "$eni_files" ] && ifquery "$iface" >/dev/null 2>&1; then
         NET_BACKEND="interfaces"
-        NET_BACKEND_FILE="/etc/network/interfaces"
+        NET_BACKEND_FILE="$eni_files"
+        if [[ "$eni_files" = *$'\n'* ]]; then
+            NET_BACKEND_REASON="IPv4 интерфейса $iface описан в нескольких ifupdown-файлах: $eni_files"
+            NET_BACKEND="conflict"
+            return 1
+        fi
     else
-        NET_BACKEND="unknown"
-        NET_BACKEND_FILE=""
+        NET_BACKEND_REASON="Не найден владелец $iface. Наличие пакета или активной службы само по себе не определяет управление интерфейсом."
+        return 1
+    fi
+
+    if [ -n "$NET_CONFIG_ID" ]; then
+        if ! command_exists netplan || ! [[ "$NET_CONFIG_ID" =~ ^[a-zA-Z0-9_-]+$ ]] ||
+            ! file=$(network_netplan_sources "$NET_CONFIG_ID" "$iface"); then
+            NET_BACKEND="unknown"
+            NET_BACKEND_REASON="Применён конфиг Netplan ($NET_CONFIG_ID), но не найден исходный Ethernet YAML в /etc/netplan. Нужны netplan, python3 и python3-yaml."
+            return 1
+        fi
+        NET_BACKEND="netplan"
+        NET_BACKEND_FILE="$file"
+    fi
+    if [ -n "$eni_files" ] && [ "$NET_BACKEND" != "interfaces" ]; then
+        NET_BACKEND_WARNING="Есть также конфигурация ifupdown: $eni_files. Её текущее применение не подтверждено; проверьте перед перезагрузкой."
+    fi
+    return 0
+}
+
+
+
+
+network_show_backend() {
+    local result=0
+    network_detect_backend "${1:-${NET_SELECTED_IFACE:-}}" || result=1
+    echo "${colors[c]}Интерфейс: ${1:-${NET_SELECTED_IFACE:-не выбран}}; backend: $NET_BACKEND${colors[x]}"
+    [ -z "$NET_BACKEND_FILE" ] || echo "${colors[c]}Источник конфигурации: $NET_BACKEND_FILE${colors[x]}"
+    [ -z "$NET_BACKEND_WARNING" ] || echo "${colors[y]}$NET_BACKEND_WARNING${colors[x]}"
+    [ -z "$NET_BACKEND_REASON" ] || echo "${colors[r]}$NET_BACKEND_REASON${colors[x]}"
+    return "$result"
+}
+
+network_networkd_target() {
+    local iface="$1" dropin
+    awk -v iface="$iface" '
+        /^\[/ {match_section=($0 == "[Match]")}
+        match_section && /^Name=/ {value=substr($0,6); if (value == iface) exact=1; else other=1}
+        END {exit !(exact && !other)}
+    ' "$NET_BACKEND_FILE" || return 1
+    for dropin in /etc/systemd/network/"${NET_BACKEND_FILE##*/}".d/*.conf \
+        /run/systemd/network/"${NET_BACKEND_FILE##*/}".d/*.conf \
+        /usr/lib/systemd/network/"${NET_BACKEND_FILE##*/}".d/*.conf \
+        /lib/systemd/network/"${NET_BACKEND_FILE##*/}".d/*.conf; do
+        [ ! -f "$dropin" ] || return 1
+    done
+    printf '/etc/systemd/network/%s\n' "${NET_BACKEND_FILE##*/}"
+}
+
+
+network_require_backend() {
+    local iface="$1"
+    network_show_backend "$iface" || return 1
+    if [ "$NET_BACKEND" = "networkd" ] && ! network_networkd_target "$iface" >/dev/null; then
+        echo "${colors[r]}$NET_BACKEND_FILE не содержит точный Match Name=$iface. Общий .network или конфиг с drop-in автоматически не изменяется.${colors[x]}"
+        return 1
     fi
 }
 
-network_show_backend() {
-    network_detect_backend
-    echo "${colors[c]}Сетевой backend: $NET_BACKEND${colors[x]}"
-    [ -n "$NET_BACKEND_FILE" ] && echo "${colors[c]}Файл конфигурации: $NET_BACKEND_FILE${colors[x]}"
+
+network_networkd_edit_file() {
+    local target
+    target=$(network_networkd_target "$1") || return 1
+    if [ ! -f "$target" ]; then
+        mkdir -p /etc/systemd/network || return 1
+        cp -p "$NET_BACKEND_FILE" "$target" || return 1
+    fi
+    printf '%s\n' "$target"
 }
+
 
 # --- Подтверждение с автоматическим откатом (для операций через SSH) ---
 network_confirm_or_rollback() {
@@ -1032,14 +1257,13 @@ network_netplan_strip_foreign_key() {
 network_netplan_write_override() {
     local iface="$1" mode="$2" ip="$3" cidr="$4" gw="$5" dns="$6"
     local file="/etc/netplan/90-setup-sh-${iface}.yaml"
-    local renderer="networkd"
-    grep -ql "renderer: NetworkManager" /etc/netplan/*.yaml 2>/dev/null && renderer="NetworkManager"
+    local renderer="${NET_RENDERER:-networkd}"
     {
         echo "network:"
         echo "  version: 2"
-        echo "  renderer: $renderer"
         echo "  ethernets:"
-        echo "    ${iface}:"
+        echo "    ${NET_CONFIG_ID:-$iface}:"
+        echo "      renderer: $renderer"
         if [ "$mode" = "dhcp" ]; then
             echo "      dhcp4: true"
         else
@@ -1060,6 +1284,7 @@ network_netplan_write_override() {
     echo "$file"
 }
 
+
 network_apply_netplan() {
     local iface="$1" mode="$2" ip="$3" cidr="$4" gw="$5" dns="$6"
     local backup_dir file errfile yaml
@@ -1075,8 +1300,8 @@ network_apply_netplan() {
         fi
     done
     if [ "$mode" != "dhcp" ]; then
-        [ -n "$gw" ]  && network_netplan_strip_foreign_key "$iface" "gateway4"
-        [ -n "$dns" ] && network_netplan_strip_foreign_key "$iface" "nameservers"
+        [ -n "$gw" ]  && network_netplan_strip_foreign_key "${NET_CONFIG_ID:-$iface}" "gateway4"
+        [ -n "$dns" ] && network_netplan_strip_foreign_key "${NET_CONFIG_ID:-$iface}" "nameservers"
     fi
     file=$(network_netplan_write_override "$iface" "$mode" "$ip" "$cidr" "$gw" "$dns")
     errfile=$(mktemp)
@@ -1100,9 +1325,10 @@ network_apply_netplan() {
     fi
 }
 
+
 # --- NetworkManager ---
 network_nm_get_connection() {
-    nmcli -t -f NAME,DEVICE con show --active 2>/dev/null | awk -F: -v d="$1" '$2==d{print $1; exit}'
+    nmcli -g GENERAL.CON-UUID device show "$1" 2>/dev/null
 }
 
 network_revert_nm() {
@@ -1150,25 +1376,46 @@ network_revert_networkd() {
 
 network_apply_networkd() {
     local iface="$1" mode="$2" ip="$3" cidr="$4" gw="$5" dns="$6" d
-    local file="/etc/systemd/network/10-${iface}.network"
+    local file
+    file=$(network_networkd_target "$iface") || return 1
+    mkdir -p /etc/systemd/network || return 1
+    # Сложные секции требуют сохранения маршрутов/адресов отдельным редактором.
+    if grep -qE '^\[(Route|Address)\]' "$NET_BACKEND_FILE"; then
+        echo "${colors[r]}В $NET_BACKEND_FILE есть отдельные Route/Address-секции; автоматическая замена IPv4 отменена.${colors[x]}"
+        return 1
+    fi
+    local tmp dhcp_mode old_dhcp
+    old_dhcp=$(awk -F= '/^\[/ {section=($0 == "[Network]")} section && $1 == "DHCP" {v=$2} END {print v}' "$NET_BACKEND_FILE")
+    dhcp_mode="no"
+    case "$old_dhcp" in yes|ipv6) dhcp_mode="ipv6" ;; esac
+    if [ "$mode" = "dhcp" ]; then
+        if [ "$dhcp_mode" = "ipv6" ]; then dhcp_mode="yes"; else dhcp_mode="ipv4"; fi
+    fi
     NET_REVERT_TARGET_FILE="$file"
     NET_REVERT_BACKUP_FILE=""
     [ -f "$file" ] && NET_REVERT_BACKUP_FILE=$(backup_file "$file")
+    tmp=$(mktemp)
+    # Сохраняем IPv6 и остальные параметры применённого .network.
+    awk '
+        /^\[/ {section=($0 == "[Network]")}
+        section && /^(DHCP|DNS)=/ {next}
+        section && /^(Address|Gateway)=/ && index($0, ":") == 0 {next}
+        {print}
+    ' "$NET_BACKEND_FILE" > "$tmp" || { rm -f "$tmp"; return 1; }
     {
-        echo "[Match]"
-        echo "Name=${iface}"
         echo
         echo "[Network]"
-        if [ "$mode" = "dhcp" ]; then
-            echo "DHCP=yes"
-        else
+        echo "DHCP=$dhcp_mode"
+        if [ "$mode" != "dhcp" ]; then
             echo "Address=${ip}/${cidr}"
             [ -n "$gw" ] && echo "Gateway=${gw}"
             for d in $dns; do
                 echo "DNS=${d}"
             done
         fi
-    } > "$file"
+    } >> "$tmp"
+    mv "$tmp" "$file" || return 1
+    chmod 600 "$file"
     if ! systemctl restart systemd-networkd; then
         echo "${colors[r]}Ошибка перезапуска systemd-networkd.${colors[x]}"
         network_revert_networkd
@@ -1178,6 +1425,8 @@ network_apply_networkd() {
         network_confirm_or_rollback network_revert_networkd
     fi
 }
+
+
 
 # --- /etc/network/interfaces ---
 network_cidr_to_netmask() {
@@ -1207,7 +1456,7 @@ network_revert_interfaces() {
 
 network_apply_interfaces() {
     local iface="$1" mode="$2" ip="$3" cidr="$4" gw="$5" dns="$6"
-    local file="/etc/network/interfaces" tmp d use_resolvectl_hook=0
+    local file="$NET_BACKEND_FILE" tmp d use_resolvectl_hook=0
     NET_REVERT_TARGET_FILE="$file"
     NET_REVERT_IFACE="$iface"
     NET_REVERT_BACKUP_FILE=$(backup_file "$file")
@@ -1223,15 +1472,21 @@ network_apply_interfaces() {
     fi
     tmp=$(mktemp)
     awk -v iface="$iface" '
-        BEGIN { skip = 0 }
-        /^(auto|iface|allow-hotplug)[ \t]/ {
-            if ($0 ~ "^iface[ \t]+" iface "[ \t]") { skip = 1; next }
-            if ($0 ~ "^auto[ \t]+" iface "$") { next }
-            if ($0 ~ "^allow-hotplug[ \t]+" iface "$") { next }
-            skip = 0
+        BEGIN {skip=0}
+        $1 == "iface" {
+            skip=($2 == iface && $3 == "inet")
+            if (skip) next
         }
-        skip && /^[ \t]/ { next }
-        { if (!skip) print }
+        $1 == "auto" || $1 == "allow-hotplug" {
+            skip=0
+            line=$1; count=0
+            for (i=2; i<=NF; i++)
+                if ($i != iface) {line=line " " $i; count++}
+            if (count) print line
+            next
+        }
+        $1 == "source" || $1 == "source-directory" {skip=0}
+        !skip {print}
     ' "$file" > "$tmp"
     {
         echo ""
@@ -1280,10 +1535,11 @@ network_apply_interfaces() {
     fi
 }
 
+
 # --- Общий диспетчер применения по backend ---
 network_apply_config() {
     local iface="$1" mode="$2" ip="$3" cidr="$4" gw="$5" dns="$6"
-    network_detect_backend
+    network_require_backend "$iface" || return 1
     case "$NET_BACKEND" in
         netplan) network_apply_netplan "$iface" "$mode" "$ip" "$cidr" "$gw" "$dns" ;;
         networkmanager) network_apply_nm "$iface" "$mode" "$ip" "$cidr" "$gw" "$dns" ;;
@@ -1344,7 +1600,7 @@ network_check_dns_health() {
 network_configure_ipv4() {
     network_select_interface || return
     local iface="$NET_SELECTED_IFACE"
-    network_show_backend
+    network_require_backend "$iface" || return 1
 
     local cur_ip cur_cidr cur_gw cur_dns cur_addr
     cur_addr=$(network_get_interface_ipv4 "$iface")
@@ -1536,7 +1792,7 @@ network_netplan_ipv6_write() {
         echo "network:"
         echo "  version: 2"
         echo "  ethernets:"
-        echo "    ${iface}:"
+        echo "    ${NET_CONFIG_ID:-$iface}:"
         if [ "$mode" = "auto" ]; then
             echo "      dhcp6: true"
             echo "      accept-ra: true"
@@ -1556,17 +1812,19 @@ network_netplan_ipv6_write() {
     chmod 600 "$file"
 }
 
+
 # sysctl.disable_ipv6 без persistence переживает только до перезагрузки, а на
 # backend'ах networkmanager/netplan/networkd сама сетевая служба при
 # следующем поднятии линка (DHCP-обновление, carrier-flap, systemctl restart)
 # возвращает интерфейс к своей политике ipv6 (auto) и заново включает его —
 # поэтому голого 'sysctl -w' на Debian 13 недостаточно даже без перезагрузки.
 network_disable_ipv6() {
-    local iface="$1" sysctl_file="/etc/sysctl.d/71-setup-sh-disable-ipv6-${iface}.conf"
+    local iface="$1"
+    local sysctl_file="/etc/sysctl.d/71-setup-sh-disable-ipv6-${iface}.conf"
+    network_require_backend "$iface" || return 1
     sysctl -w "net.ipv6.conf.${iface}.disable_ipv6=1" >/dev/null
     mkdir -p /etc/sysctl.d
     printf 'net.ipv6.conf.%s.disable_ipv6 = 1\n' "$iface" > "$sysctl_file"
-    network_detect_backend
     case "$NET_BACKEND" in
         networkmanager)
             local conn; conn=$(network_nm_get_connection "$iface")
@@ -1580,7 +1838,7 @@ network_disable_ipv6() {
             netplan apply
             ;;
         networkd)
-            local netfile="/etc/systemd/network/10-${iface}.network"
+            local netfile; netfile=$(network_networkd_edit_file "$iface") || return 1
             if [ -f "$netfile" ]; then
                 sed -i '/^LinkLocalAddressing=\|^IPv6AcceptRA=/d' "$netfile"
                 sed -i '/^\[Network\]/a LinkLocalAddressing=ipv4\nIPv6AcceptRA=false' "$netfile"
@@ -1590,11 +1848,13 @@ network_disable_ipv6() {
     esac
 }
 
+
 network_enable_ipv6() {
-    local iface="$1" sysctl_file="/etc/sysctl.d/71-setup-sh-disable-ipv6-${iface}.conf"
+    local iface="$1"
+    local sysctl_file="/etc/sysctl.d/71-setup-sh-disable-ipv6-${iface}.conf"
+    network_require_backend "$iface" || return 1
     rm -f "$sysctl_file"
     sysctl -w "net.ipv6.conf.${iface}.disable_ipv6=0" >/dev/null
-    network_detect_backend
     case "$NET_BACKEND" in
         networkmanager)
             local conn; conn=$(network_nm_get_connection "$iface")
@@ -1608,12 +1868,13 @@ network_enable_ipv6() {
             netplan try --timeout 120
             ;;
         networkd)
-            local netfile="/etc/systemd/network/10-${iface}.network"
+            local netfile; netfile=$(network_networkd_edit_file "$iface") || return 1
             [ -f "$netfile" ] && sed -i '/^LinkLocalAddressing=\|^IPv6AcceptRA=/d' "$netfile"
             systemctl restart systemd-networkd
             ;;
     esac
 }
+
 
 network_configure_ipv6() {
     network_select_interface || return
@@ -1645,9 +1906,9 @@ network_configure_ipv6() {
             if [ "$running_via_ssh" -eq 1 ]; then
                 confirm_dangerous "Изменение IPv6 может повлиять на доступ. Продолжить?" || return
             fi
+            network_require_backend "$iface" || return 1
             rm -f "/etc/sysctl.d/71-setup-sh-disable-ipv6-${iface}.conf"
             sysctl -w "net.ipv6.conf.${iface}.disable_ipv6=0" >/dev/null
-            network_detect_backend
             case "$NET_BACKEND" in
                 networkmanager)
                     local conn; conn=$(network_nm_get_connection "$iface")
@@ -1661,7 +1922,7 @@ network_configure_ipv6() {
                     netplan try --timeout 120
                     ;;
                 networkd)
-                    local netfile="/etc/systemd/network/10-${iface}.network"
+                    local netfile; netfile=$(network_networkd_edit_file "$iface") || return 1
                     [ -f "$netfile" ] && sed -i '/^LinkLocalAddressing=\|^IPv6AcceptRA=/d' "$netfile"
                     ;;
                 *) echo "${colors[c]}Автоматическая настройка IPv6 для этого backend не реализована. При необходимости используйте 'ip -6 addr add' вручную.${colors[x]}" ;;
@@ -1762,13 +2023,13 @@ network_change_mtu() {
         echo "${colors[r]}Некорректное значение MTU (68-9000).${colors[x]}"
         return
     fi
+    network_require_backend "$iface" || return 1
     if ip link set dev "$iface" mtu "$new_mtu"; then
         echo "${colors[g]}[OK] MTU изменён на $new_mtu.${colors[x]}"
     else
         echo "${colors[r]}[ERROR] Не удалось изменить MTU.${colors[x]}"
         return
     fi
-    network_detect_backend
     case "$NET_BACKEND" in
         netplan)
             local file="/etc/netplan/92-setup-sh-${iface}-mtu.yaml"
@@ -1776,7 +2037,7 @@ network_change_mtu() {
                 echo "network:"
                 echo "  version: 2"
                 echo "  ethernets:"
-                echo "    ${iface}:"
+                echo "    ${NET_CONFIG_ID:-$iface}:"
                 echo "      mtu: ${new_mtu}"
             } > "$file"
             netplan apply
@@ -1825,6 +2086,7 @@ network_change_mac() {
     fi
     confirm_dangerous "Сменить MAC-адрес $iface на $new_mac?" || return
 
+    network_require_backend "$iface" || return 1
     if ip link set dev "$iface" down && ip link set dev "$iface" address "$new_mac" && ip link set dev "$iface" up; then
         echo "${colors[g]}[OK] MAC-адрес изменён (runtime): $new_mac${colors[x]}"
     else
@@ -1833,7 +2095,6 @@ network_change_mac() {
         return 1
     fi
 
-    network_detect_backend
     case "$NET_BACKEND" in
         netplan)
             local file="/etc/netplan/93-setup-sh-${iface}-mac.yaml"
@@ -1841,7 +2102,7 @@ network_change_mac() {
                 echo "network:"
                 echo "  version: 2"
                 echo "  ethernets:"
-                echo "    ${iface}:"
+                echo "    ${NET_CONFIG_ID:-$iface}:"
                 echo "      macaddress: ${new_mac}"
             } > "$file"
             netplan apply
@@ -1862,12 +2123,12 @@ network_change_mac() {
             echo "${colors[y]}Файл $link_file создан. Правило udev применится при следующей загрузке/пересоздании интерфейса.${colors[x]}"
             ;;
         interfaces)
-            if grep -qE "^iface[[:space:]]+${iface}[[:space:]]" /etc/network/interfaces 2>/dev/null; then
-                backup_file /etc/network/interfaces >/dev/null
-                sed -i -E "/^iface[[:space:]]+${iface}[[:space:]]/a\\    hwaddress ether ${new_mac}" /etc/network/interfaces
-                echo "${colors[y]}Добавлена строка 'hwaddress ether' в /etc/network/interfaces.${colors[x]}"
+            if grep -qE "^iface[[:space:]]+${iface}[[:space:]]" "$NET_BACKEND_FILE" 2>/dev/null; then
+                backup_file "$NET_BACKEND_FILE" >/dev/null
+                sed -i -E "/^iface[[:space:]]+${iface}[[:space:]]/a\\    hwaddress ether ${new_mac}" "$NET_BACKEND_FILE"
+                echo "${colors[y]}Добавлена строка 'hwaddress ether' в $NET_BACKEND_FILE.${colors[x]}"
             else
-                echo "${colors[c]}Секция iface для $iface не найдена в /etc/network/interfaces — MAC изменён только на время работы (runtime).${colors[x]}"
+                echo "${colors[c]}Секция iface для $iface не найдена в $NET_BACKEND_FILE — MAC изменён только на время работы (runtime).${colors[x]}"
             fi
             ;;
         *) echo "${colors[c]}MAC изменён только на время работы (runtime). Для постоянства настройте backend вручную.${colors[x]}" ;;
@@ -1906,7 +2167,7 @@ network_fix_dhcp_clientid() {
         confirm_dangerous "Настроить $iface на отправку обычного MAC как DHCP client-id?" || return
     fi
 
-    network_detect_backend
+    network_require_backend "$iface" || return 1
     case "$NET_BACKEND" in
         netplan)
             local file="/etc/netplan/92-setup-sh-${iface}-dhcp-id.yaml"
@@ -1914,7 +2175,7 @@ network_fix_dhcp_clientid() {
                 echo "network:"
                 echo "  version: 2"
                 echo "  ethernets:"
-                echo "    ${iface}:"
+                echo "    ${NET_CONFIG_ID:-$iface}:"
                 echo "      dhcp-identifier: mac"
             } > "$file"
             chmod 600 "$file"
@@ -1936,7 +2197,7 @@ network_fix_dhcp_clientid() {
             echo "${colors[g]}[OK] ipv4.dhcp-client-id=mac установлен для подключения $conn.${colors[x]}"
             ;;
         networkd)
-            local file="/etc/systemd/network/10-${iface}.network"
+            local file; file=$(network_networkd_edit_file "$iface") || return 1
             if [ ! -f "$file" ]; then
                 echo "${colors[r]}Файл $file не найден — сначала настройте интерфейс через IPv4/DHCP в этом скрипте.${colors[x]}"
                 return 1
@@ -2023,6 +2284,9 @@ network_interfaces_menu() {
 }
 
 network_restart() {
+    network_select_interface || return
+    local iface="$NET_SELECTED_IFACE"
+    network_require_backend "$iface" || return 1
     echo "${colors[y]}Перезапуск сетевой службы применит текущую сохранённую конфигурацию (может отличаться от состояния runtime).${colors[x]}"
     if [ "$running_via_ssh" -eq 1 ]; then
         show_ssh_state
@@ -2031,7 +2295,6 @@ network_restart() {
     else
         confirm "Перезапустить сетевую службу?" "n" || return
     fi
-    network_detect_backend
     case "$NET_BACKEND" in
         netplan)
             if netplan apply; then
@@ -2041,35 +2304,26 @@ network_restart() {
             fi
             ;;
         networkmanager)
-            if systemctl restart NetworkManager; then
+            if nmcli con up "$NET_NM_UUID"; then
                 echo "${colors[g]}[OK] NetworkManager перезапущен.${colors[x]}"
             else
                 echo "${colors[r]}[ERROR] Ошибка перезапуска NetworkManager.${colors[x]}"
             fi
             ;;
         networkd)
-            if systemctl restart systemd-networkd; then
+            if networkctl reconfigure "$iface"; then
                 echo "${colors[g]}[OK] systemd-networkd перезапущен.${colors[x]}"
             else
                 echo "${colors[r]}[ERROR] Ошибка перезапуска systemd-networkd.${colors[x]}"
             fi
             ;;
         interfaces)
-            if systemctl list-unit-files 2>/dev/null | grep -q '^networking\.service'; then
-                if systemctl restart networking; then
-                    echo "${colors[g]}[OK] Сеть перезапущена (networking.service).${colors[x]}"
-                else
-                    echo "${colors[r]}[ERROR] Ошибка перезапуска networking.service.${colors[x]}"
-                fi
+            ifdown "$iface" 2>/dev/null
+            if ifup "$iface"; then
+                echo "${colors[g]}[OK] Интерфейс $iface перезапущен (ifupdown).${colors[x]}"
             else
-                echo "${colors[y]}Служба networking.service не найдена, перезапускаю интерфейсы по отдельности...${colors[x]}"
-                local iface
-                network_list_interfaces >/dev/null
-                for iface in "${NET_IFACES[@]}"; do
-                    ifdown "$iface" 2>/dev/null
-                    ifup "$iface" 2>/dev/null
-                done
-                echo "${colors[g]}[OK] Интерфейсы перезапущены.${colors[x]}"
+                echo "${colors[r]}[ERROR] Не удалось поднять $iface.${colors[x]}"
+                return 1
             fi
             ;;
         *)
@@ -2078,6 +2332,7 @@ network_restart() {
             ;;
     esac
 }
+
 
 # --- Диагностика сети ---
 network_diagnostics_menu() {
@@ -4353,12 +4608,15 @@ reboot_system() {
 # 14. ГЛАВНОЕ МЕНЮ
 # =========================================================
 
-# Первоначальное определение состояния SSH (настроенный порт, сессия)
+# Первоначальное определение ОС и SSH-сессии.
+detect_system
 refresh_ssh_state
 
 while true; do
     clear
     echo "${colors[g]}=== Настройка Debian/Ubuntu ===${colors[x]}"
+    echo "${colors[c]}Система: $SYSTEM_NAME${colors[x]}"
+    [ "$SYSTEM_SUPPORTED" -eq 1 ] || echo "${colors[y]}Эта версия ОС не входит в целевой список скрипта.${colors[x]}"
     echo "${colors[r]}Задайте предварительно пароль для root командой 'sudo passwd root'.${colors[x]}"
     echo
     echo "${colors[y]}Выберите номер нужного пункта:${colors[x]}"
