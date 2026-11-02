@@ -782,11 +782,20 @@ network_get_interface_ipv6() {
 network_get_dns() {
     local dns
     if command_exists resolvectl; then
-        dns=$(resolvectl dns 2>/dev/null | awk -F': ' '{print $2}' | tr -s ' \n' ' ' | sed 's/^ *//;s/ *$//')
-    else
-        dns=$(awk '/^nameserver/{print $2}' /etc/resolv.conf 2>/dev/null | tr '\n' ' ' | sed 's/ *$//')
+        dns=$(resolvectl dns 2>/dev/null | awk -F': ' '{print $2}')
     fi
-    echo "$dns"
+    if [ -z "$dns" ]; then
+        dns=$(awk '/^nameserver/{print $2}' /etc/resolv.conf 2>/dev/null)
+    fi
+    # resolvectl выводит глобальные DNS и DNS каждого интерфейса отдельно.
+    # Убираем повторы, сохраняя порядок первого появления.
+    printf '%s\n' "$dns" | awk '{
+        for (i = 1; i <= NF; i++)
+            if (!seen[$i]++) {
+                printf "%s%s", sep, $i
+                sep = " "
+            }
+    } END {print ""}'
 }
 
 network_list_interfaces() {
@@ -997,10 +1006,18 @@ network_netplan_write_override() {
 
 network_apply_netplan() {
     local iface="$1" mode="$2" ip="$3" cidr="$4" gw="$5" dns="$6"
-    local backup_dir file errfile
+    local backup_dir file errfile yaml
     backup_dir="$BACKUP_DIR/netplan_$(date +%Y%m%d_%H%M%S)"
     mkdir -p "$backup_dir"
     cp -p /etc/netplan/*.yaml "$backup_dir/" 2>/dev/null
+    # Netplan читает все YAML, включая файлы установщика и cloud-init.
+    for yaml in /etc/netplan/*.yaml; do
+        [ -f "$yaml" ] || continue
+        if ! chmod 600 "$yaml"; then
+            echo "${colors[r]}Не удалось ограничить права $yaml.${colors[x]}"
+            return 1
+        fi
+    done
     if [ "$mode" != "dhcp" ]; then
         [ -n "$gw" ]  && network_netplan_strip_foreign_key "$iface" "gateway4"
         [ -n "$dns" ] && network_netplan_strip_foreign_key "$iface" "nameservers"
